@@ -172,6 +172,11 @@ Novo workflow (`.github/workflows/deploy-arquitetura-pages.yml`):
 - Permissões: `contents: read`, `pages: write`, `id-token: write` (escopadas ao mínimo).
 - Ação: Copia `docs/arquitetura.html` para `_site/index.html`, configura GitHub Pages via `actions/configure-pages@v5`, envia artefato via `actions/upload-pages-artifact@v3`, deploya via `actions/deploy-pages@v4`.
 - Resultado: `docs/arquitetura.html` (gerado pela skill `archify`) fica disponível de forma interativa em `https://c3t4r4.github.io/Backapeando-Backup-Manager/` (derivado de `git remote`).
+- **Pré-requisito**: GitHub Pages deve ser habilitado **uma única vez** via API antes do workflow funcionar — a auto-inicialização do `configure-pages` não completou automaticamente aqui. Habilitar via:
+  ```bash
+  gh api --method POST repos/{owner}/{repo}/pages -f "build_type=workflow"
+  ```
+  ou manualmente em Settings → Pages → Build and deployment → Source → "GitHub Actions".
 
 ### Build/publish de imagem do `worker`
 
