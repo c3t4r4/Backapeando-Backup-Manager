@@ -4,7 +4,7 @@ Sistema de gestão de backups de bancos de dados PostgreSQL via SSH com retenç�
 
 ## System Architecture
 
-[`docs/arquitetura.html`](.docs/arquitetura.html)
+[`Arquitetura`](./docs/Arquitetura.html)
 
 ## Quick Start (Development)
 
