@@ -164,7 +164,18 @@ Regra: logs não podem conter credenciais, tokens nem dados pessoais desnecessá
 
 ## Pipeline de CI/CD
 
-Não coberto neste repositório para o `worker` em produção — o serviço já está declarado em `docker-compose.prod.yml`, mas o pipeline de build/publish de imagem ainda não existe (restrição já conhecida do `CLAUDE.md`).
+### Publicação do diagrama de arquitetura no GitHub Pages
+
+Novo workflow (`.github/workflows/deploy-arquitetura-pages.yml`):
+
+- Gatilho: `push` na branch `main` quando `docs/arquitetura.html` muda, + `workflow_dispatch` para disparo manual.
+- Permissões: `contents: read`, `pages: write`, `id-token: write` (escopadas ao mínimo).
+- Ação: Copia `docs/arquitetura.html` para `_site/index.html`, configura GitHub Pages via `actions/configure-pages@v5`, envia artefato via `actions/upload-pages-artifact@v3`, deploya via `actions/deploy-pages@v4`.
+- Resultado: `docs/arquitetura.html` (gerado pela skill `archify`) fica disponível de forma interativa em `https://c3t4r4.github.io/Backapeando-Backup-Manager/` (derivado de `git remote`).
+
+### Build/publish de imagem do `worker`
+
+Não coberto neste repositório para produção — o serviço já está declarado em `docker-compose.prod.yml`, mas o pipeline de build/publish de imagem ainda não existe (restrição já conhecida do `CLAUDE.md`). Esta linha diz respeito exclusivamente a imagens Docker do `worker`, não ao workflow de Pages acima.
 
 ## Regras de alteração
 
@@ -181,3 +192,4 @@ Não coberto neste repositório para o `worker` em produção — o serviço já
 | ---------- | ------------------------------------------------------------------------------------------------------------ | --------- | ------------------------ | ------------------------------------------------------------------------ |
 | 2026-09-15 | Documento criado do zero a partir de `docker-compose*.yml` e `Dockerfile`s reais, ausente antes desta tarefa | dev, prod | `/init-project --update` | `.claude/plans/Backapeando-2026-09-15-17-41-inicializacao-governanca.md` |
 | 2026-09-16 | Novas env vars `BACKUP_TASK_TIMEOUT` (default 6h) e `WATCHDOG_POLL_INTERVAL` (default 5min) no `worker` — não adicionadas aos `docker-compose*.yml` (usam o default do código; adicionar explicitamente se o operador quiser um valor diferente) | dev, prod | Corrigir backup preso em `running` para sempre (nenhum timeout após o handshake SSH) | `.claude/plans/Backapeando-2026-09-16-09-19-historico-todos-servidores-erro-detalhado-fix-cron.md` |
+| 2026-09-16 | Novo workflow `.github/workflows/deploy-arquitetura-pages.yml` para publicar `docs/arquitetura.html` no GitHub Pages; README atualizado com link renderizado | ci/cd | Publicar diagrama de arquitetura de forma interativa e acessível no GitHub Pages | `.claude/plans/Backapeando-2026-09-16-preciso-que-crie-um-actions-github-pages-arquitetura.md` |

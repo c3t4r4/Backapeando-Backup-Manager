@@ -4,7 +4,7 @@ Sistema de gestão de backups de bancos de dados PostgreSQL via SSH com retenç�
 
 ## System Architecture
 
-[`Arquitetura`](./docs/arquitetura.html)
+[`Arquitetura`](./docs/arquitetura.html) — [Ver renderizado ↗](https://c3t4r4.github.io/Backapeando-Backup-Manager/)
 
 ## Quick Start (Development)
 
