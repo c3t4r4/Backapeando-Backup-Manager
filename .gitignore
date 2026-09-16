@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+*.dump
+*.backup
+/backend/api
+/backend/worker
+/frontend/node_modules/
+/frontend/dist/
+*.log
+.claude
+.DS_Store

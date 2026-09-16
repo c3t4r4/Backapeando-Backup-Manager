@@ -1,0 +1,210 @@
+# Production Docker Swarm compose file
+# Deploy with: docker stack deploy -c docker-compose.prod.yml backapeando-backup
+# Requires: docker secret create DATABASE_URL <(cat .env.prod | grep DATABASE_URL | cut -d= -f2-)
+#           docker secret create MASTER_ENCRYPTION_KEY <(cat .env.prod | grep MASTER_ENCRYPTION_KEY | cut -d= -f2-)
+
+services:
+  # PostgreSQL database (external or containerized)
+  # For production, consider managed database (RDS, Azure Database for PostgreSQL)
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: backapeando_backup
+      POSTGRES_USER: backapeando_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/18/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U backapeando_user -d backapeando_backup"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backapeando_backend
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "1"
+          memory: 1G
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+
+  # Redis cache and rate limiter (Cluster singleton)
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxclients 10000
+    networks:
+      - backapeando_backend
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Backend API (replicated)
+  api:
+    image: backapeando-api:latest # Pre-built image or built locally with build context
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      MASTER_ENCRYPTION_KEY_FILE: /run/secrets/master_encryption_key
+      HTTP_ADDR: ":8081"
+      SECURE_COOKIES: "true"
+      REDIS_URL: "redis://redis:6379"
+      REDIS_DB: "0"
+    secrets:
+      - database_url
+      - master_encryption_key
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8081/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backapeando_backend
+      - backapeando_ingress
+    deploy:
+      mode: replicated
+      replicas: 3 # Adjust based on traffic
+      placement:
+        constraints:
+          - node.role == worker
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.api.rule=Host(`api.backup.local`) || PathPrefix(`/api`)"
+        - "traefik.http.routers.api.entrypoints=web"
+        - "traefik.http.services.api.loadbalancer.server.port=8081"
+        - "traefik.http.services.api.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.api.loadbalancer.sticky.cookie.name=BACKEND_SESSIONID"
+        - "traefik.http.services.api.loadbalancer.sticky.cookie.httponly=true"
+        - "traefik.http.services.api.loadbalancer.sticky.cookie.secure=true" # HTTPS obrigatório
+        - "traefik.http.services.api.loadbalancer.sticky.cookie.samesite=Strict" # CSRF protection
+        - "traefik.http.services.api.loadbalancer.sticky.cookie.maxage=86400" # 24h
+        - "traefik.http.services.api.loadbalancer.healthcheck.path=/api/health"
+        - "traefik.http.services.api.loadbalancer.healthcheck.interval=30s"
+
+  # Backup scheduler worker (polls backup_runs / servers, executes backups)
+  # No HTTP port, no Traefik labels — this service only talks to Postgres,
+  # target SSH servers, and Azure Blob Storage.
+  worker:
+    image: backapeando-worker:latest # Pre-built image or built locally with build context
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      MASTER_ENCRYPTION_KEY_FILE: /run/secrets/master_encryption_key
+      SECURE_COOKIES: "true" # unused by the worker, but config.Load() requires it to be set
+      MAX_CONCURRENT_BACKUPS: "3"
+      SCHEDULER_POLL_INTERVAL: "30"
+      GRACEFUL_SHUTDOWN_TIMEOUT: "300"
+    secrets:
+      - database_url
+      - master_encryption_key
+    networks:
+      - backapeando_backend
+    deploy:
+      mode: replicated
+      replicas: 1 # Safe to scale later: scheduling uses SKIP LOCKED
+      placement:
+        constraints:
+          - node.role == worker
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+  # Frontend (replicated)
+  web:
+    image: backapeando-web:latest # Pre-built image
+    networks:
+      - backapeando_ingress
+    deploy:
+      mode: replicated
+      replicas: 2 # Adjust based on traffic
+      placement:
+        constraints:
+          - node.role == worker
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.web.rule=Host(`backup.local`) || PathPrefix(`/`)"
+        - "traefik.http.routers.web.entrypoints=web"
+        - "traefik.http.services.web.loadbalancer.server.port=80"
+        - "traefik.http.services.web.loadbalancer.healthcheck.path=/health"
+        - "traefik.http.services.web.loadbalancer.healthcheck.interval=30s"
+
+networks:
+  backapeando_backend:
+    driver: overlay
+    driver_opts:
+      com.docker.network.driver.mtu: 1450
+  backapeando_ingress:
+    driver: overlay
+    driver_opts:
+      com.docker.network.driver.mtu: 1450
+
+volumes:
+  postgres_data:
+    driver: local
+  traefik_data:
+    driver: local
+
+secrets:
+  database_url:
+    external: true
+    name: database_url
+  master_encryption_key:
+    external: true
+    name: master_encryption_key
+  postgres_password:
+    external: true
+    name: postgres_password

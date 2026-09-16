@@ -1,0 +1,16 @@
+# Never let real secrets or dev-only files into a build context that gets
+# COPY . .'d into a builder-stage image layer (cmd/api/Dockerfile,
+# cmd/worker/Dockerfile) — that layer persists in the local build cache and
+# any exported/imported CI cache even though the final runtime stage only
+# copies out the compiled binary.
+.env
+.env.*
+!.env.example
+
+.git
+.claude/
+*.md
+
+# Test artifacts / local tooling, irrelevant to the compiled binary
+*.log
+coverage.out
