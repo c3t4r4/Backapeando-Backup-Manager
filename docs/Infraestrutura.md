@@ -169,14 +169,29 @@ Regra: logs não podem conter credenciais, tokens nem dados pessoais desnecessá
 Novo workflow (`.github/workflows/deploy-arquitetura-pages.yml`):
 
 - Gatilho: `push` na branch `main` quando `docs/arquitetura.html` muda, + `workflow_dispatch` para disparo manual.
-- Permissões: `contents: read`, `pages: write`, `id-token: write` (escopadas ao mínimo).
-- Ação: Copia `docs/arquitetura.html` para `_site/index.html`, configura GitHub Pages via `actions/configure-pages@v5`, envia artefato via `actions/upload-pages-artifact@v3`, deploya via `actions/deploy-pages@v4`.
-- Resultado: `docs/arquitetura.html` (gerado pela skill `archify`) fica disponível de forma interativa em `https://c3t4r4.github.io/Backapeando-Backup-Manager/` (derivado de `git remote`).
+- Permissões: `contents: write`, `pages: write`, `id-token: write` — elevada para `contents: write` para permitir commit/push automático da imagem gerada (ver abaixo).
+- Steps:
+  1. Checkout do repositório.
+  2. **Novo**: "Generate diagram screenshot" — Puppeteer 25.11.0 renderiza `docs/arquitetura.html` em headless Chromium (1600×1200, 2x scale), aguarda `networkidle0`, tira screenshot `fullPage` e salva em `docs/arquitetura.png`. Instalação isolada em diretório temporário (não polui `node_modules`).
+  3. **Novo**: "Commit generated image" — `git add docs/arquitetura.png` (arquivo único, não `git add -A`), commita com mensagem `[skip ci]` e faz push direto para `main` via `GITHUB_TOKEN` (permissão `contents: write`). Se não houver mudanças (screenshot idêntico), pula o commit.
+  4. Copia `docs/arquitetura.html` para `_site/index.html`, configura GitHub Pages via `actions/configure-pages@v5`, envia artefato via `actions/upload-pages-artifact@v3`, deploya via `actions/deploy-pages@v4`.
+- Resultado final: 
+  - `docs/arquitetura.html` (interativo, gerado pela skill `archify`) publicado em `https://c3t4r4.github.io/Backapeando-Backup-Manager/`.
+  - `docs/arquitetura.png` (estático, gerado por Puppeteer) versionado no repositório, exibido no README quando visualizado no GitHub.
 - **Pré-requisito**: GitHub Pages deve ser habilitado **uma única vez** via API antes do workflow funcionar — a auto-inicialização do `configure-pages` não completou automaticamente aqui. Habilitar via:
   ```bash
   gh api --method POST repos/{owner}/{repo}/pages -f "build_type=workflow"
   ```
   ou manualmente em Settings → Pages → Build and deployment → Source → "GitHub Actions".
+
+### Segurança — permissão `contents: write`
+
+O workflow usa `contents: write` para fazer commit da imagem gerada. Mitigação de risco:
+- Gatilho restrito a `push` em `main` (não PRs de forks) — só quem já pode escrever em `main` consegue disparar o workflow.
+- `git add` explícito de um arquivo único (`docs/arquitetura.png`), nunca `git add -A`.
+- Versão do Puppeteer pinada exatamente (`25.11.0`), não `@latest`.
+- Mensagem de commit inclui `[skip ci]`, impedindo re-disparo do workflow por causa do próprio commit.
+- Instalação do Puppeteer isolada em diretório temporário fora da árvore de trabalho do Git.
 
 ### Build/publish de imagem do `worker`
 

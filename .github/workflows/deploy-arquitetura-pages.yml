@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -27,6 +27,63 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Generate diagram screenshot
+        run: |
+          # Create isolated temp directory for Puppeteer installation
+          TMPDIR=$(mktemp -d)
+          cd "$TMPDIR"
+
+          npm init -y
+          npm install puppeteer@25.11.0
+
+          # Create screenshot script
+          cat > screenshot.mjs << 'EOFJS'
+          import puppeteer from 'puppeteer';
+
+          (async () => {
+            const browser = await puppeteer.launch({
+              headless: true,
+              args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            });
+
+            const page = await browser.newPage();
+            await page.setViewport({ width: 1600, height: 1200, deviceScaleFactor: 2 });
+
+            const filePath = `file://${process.env.GITHUB_WORKSPACE}/docs/arquitetura.html`;
+            console.log(`Loading: ${filePath}`);
+
+            await page.goto(filePath, { waitUntil: 'networkidle0' });
+            console.log('Page loaded, taking screenshot...');
+
+            await page.screenshot({
+              path: `${process.env.GITHUB_WORKSPACE}/docs/arquitetura.png`,
+              fullPage: true,
+            });
+
+            await browser.close();
+            console.log('Screenshot saved to docs/arquitetura.png');
+          })().catch(err => {
+            console.error('Error:', err);
+            process.exit(1);
+          });
+          EOFJS
+
+          node screenshot.mjs
+
+      - name: Commit generated image
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add docs/arquitetura.png
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: regenerar docs/arquitetura.png [skip ci]"
+            git push origin HEAD:main
+          fi
 
       - name: Prepare GitHub Pages artifact
         run: |
