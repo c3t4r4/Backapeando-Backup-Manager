@@ -17,7 +17,7 @@ agendamento via expressão cron por servidor.
 
 - Frontend: Vue 3 + Vite + TypeScript + Tailwind CSS + shadcn-vue (parcial, `reka-ui`)
 - Backend: Go 1.26, stdlib `net/http` (ServeMux com padrões de rota `MÉTODO /caminho`)
-- Banco de dados: PostgreSQL 16+ via `pgx/v5`
+- Banco de dados: PostgreSQL 18+ via `pgx/v5`
 - ORM: nenhum — SQL manual via `pgx`, auditabilidade de dados criptografados
 - Autenticação: sessão HTTP em cookie (revogável no servidor) + CSRF double-submit
 - API: REST, mesma origem (frontend e backend atrás do mesmo proxy Nginx/Traefik)
@@ -76,7 +76,7 @@ docs/                      # documentação de governança
   cliente instanciar e qual segredo descriptografar.
 - **Scheduler assíncrono separado** (`cmd/worker`): processo próprio, evita
   duplicidade de execução entre réplicas via `SELECT ... FOR UPDATE SKIP
-  LOCKED` (`Servers.GetReadyServersForScheduling`).
+LOCKED` (`Servers.GetReadyServersForScheduling`).
 - **Execução de backup** (`scheduler.BackupExecutor` + `scheduler.BuildDumpPlan`
   em `dumpcommand.go`): decripta a chave SSH e a senha do banco (se
   configurada), monta o backend de storage, conecta via SSH com TOFU, e
@@ -105,8 +105,8 @@ docs/                      # documentação de governança
 - **SQL Server é um caso especial**: `BACKUP DATABASE` não tem streaming
   nativo para stdout como `pg_dump`/`mysqldump`, então `BuildDumpPlan`
   retorna um `DumpPlan` de três comandos: `PreCmd` (`sqlcmd ... BACKUP
-  DATABASE ... TO DISK=<tempPath>`, síncrono), `StreamCmd` (`cat
-  <tempPath>`, o que é de fato enviado ao storage backend), e `CleanupCmd`
+DATABASE ... TO DISK=<tempPath>`, síncrono), `StreamCmd` (`cat
+<tempPath>`, o que é de fato enviado ao storage backend), e `CleanupCmd`
   (`rm -f <tempPath>`, sempre executado ao final, sucesso ou falha, para
   minimizar a janela em que o dump fica em texto não criptografado no host
   remoto).
@@ -120,10 +120,10 @@ docs/                      # documentação de governança
   paginada (não via `COUNT(*) OVER()` acoplado ao `LIMIT/OFFSET`), porque uma
   página além do último registro retorna zero linhas e uma window function
   não tem linha nenhuma para carregar o total nesse caso. `GET
-  /api/backup-runs` (RN-BACKUP-026) reaproveita o mesmo padrão de paginação
+/api/backup-runs` (RN-BACKUP-026) reaproveita o mesmo padrão de paginação
   para o histórico combinando todos os servidores — `BackupRunRepo.ListAll`
   generaliza `List` tornando `server_id` opcional (`$1::uuid IS NULL OR
-  server_id = $1`, mesmo padrão já usado por `status`), sem alterar `List`
+server_id = $1`, mesmo padrão já usado por `status`), sem alterar `List`
   em si.
 - **Redação de segredo em erro/log persistido** (RN-BACKUP-027): `internal/backupcore`
   (já o pacote compartilhado entre `scheduler/executor.go` e
@@ -169,7 +169,7 @@ flowchart LR
     API --> Auth["Middleware: CORS/Recover/Logging/SecurityHeaders/CSRF/Sessão"]
     Auth --> Handlers["Handlers HTTP"]
     Handlers --> Repos["Repositories (pgx)"]
-    Repos --> Banco[("PostgreSQL 16")]
+    Repos --> Banco[("PostgreSQL 18")]
     Handlers -.-> Redis[("Redis — rate limit de login")]
     Worker["Worker (cmd/worker)"] --> Repos
     Worker --> SSH["SSH + TOFU → servidor remoto"]
@@ -274,7 +274,7 @@ stateDiagram-v2
 - Contexto: até esta tarefa, o sistema assumia implicitamente que todo
   servidor rodava PostgreSQL dentro de um container Docker (`ContainerName`
   era `NOT NULL`, `buildPgDumpCommand` gerava sempre `docker exec ...
-  pg_dump`). O usuário pediu suporte a MySQL e SQL Server, além da opção de
+pg_dump`). O usuário pediu suporte a MySQL e SQL Server, além da opção de
   o banco rodar direto no host/instância remota, sem Docker.
 - Decisão: `domain.Server` ganha dois discriminadores — `DBEngine`
   (`postgres`/`mysql`/`sqlserver`) e `DeploymentMode` (`docker`/`host`),
@@ -333,7 +333,7 @@ stateDiagram-v2
   `Connect`/`RunCommand`) para que o timeout realmente interrompa uma
   leitura/escrita travada; (3) `GetReadyServersForScheduling` ganha
   `AND NOT EXISTS (... WHERE br.server_id = servers.id AND br.status IN
-  ('running','queued'))`; (4) novo `scheduler.Watchdog` (`watchdog.go`), uma
+('running','queued'))`; (4) novo `scheduler.Watchdog` (`watchdog.go`), uma
   rotina periódica separada que marca como `failed` qualquer `backup_run`
   preso em `running` além do timeout configurado — rede de segurança para
   runs já travados antes desta correção, ou qualquer caminho não coberto
@@ -389,7 +389,7 @@ stateDiagram-v2
 
 ## Banco de dados
 
-- Banco: PostgreSQL 16+
+- Banco: PostgreSQL 18+
 - ORM: nenhum (SQL manual via pgx)
 - Migrações: `golang-migrate/v4`, embutidas via `embed.FS`, com `.up.sql`/`.down.sql` reversíveis
 - Regra de migrações: nunca remover ou alterar uma migração já aplicada sem autorização explícita do usuário
@@ -399,13 +399,13 @@ stateDiagram-v2
 
 ## Integrações externas
 
-| Serviço | Finalidade | Autenticação | Ambiente | Observações |
-| --- | --- | --- | --- | --- |
-| Azure Blob Storage | Destino de backup (tipo `azure`) | SAS token (criptografado AES-256-GCM) | Configurável por `StorageTarget` | AAD do GCM é `id + ":" + "sas_token"` |
-| S3 / compatível | Destino de backup (tipo `s3`) | Access key + secret (secret criptografado) | Configurável por `StorageTarget` | Suporta `s3_use_path_style` para compatíveis (MinIO etc.) |
-| Filesystem / NFS | Destino de backup (tipo `filesystem`) | N/A (caminho local montado) | Configurável por `StorageTarget` | `fs_root_path` obrigatório |
-| Redis | Rate limiting de login distribuído | Sem autenticação configurada nos composes atuais | Dev e prod | `⚠ inferida`: verificar se produção usa Redis com senha — não confirmado nesta tarefa |
-| Servidor de banco remoto (via SSH) | Origem do dump (`pg_dump`/`mysqldump`/`sqlcmd`, em container Docker ou direto no host) | Chave SSH ed25519 (privada criptografada AES-256-GCM) + TOFU de host key + senha do banco opcional/obrigatória por engine (criptografada AES-256-GCM) | Por `Server` | Handshake SSH com timeout obrigatório (RN-BACKUP-015) |
+| Serviço                            | Finalidade                                                                             | Autenticação                                                                                                                                          | Ambiente                         | Observações                                                                           |
+| ---------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------- |
+| Azure Blob Storage                 | Destino de backup (tipo `azure`)                                                       | SAS token (criptografado AES-256-GCM)                                                                                                                 | Configurável por `StorageTarget` | AAD do GCM é `id + ":" + "sas_token"`                                                 |
+| S3 / compatível                    | Destino de backup (tipo `s3`)                                                          | Access key + secret (secret criptografado)                                                                                                            | Configurável por `StorageTarget` | Suporta `s3_use_path_style` para compatíveis (MinIO etc.)                             |
+| Filesystem / NFS                   | Destino de backup (tipo `filesystem`)                                                  | N/A (caminho local montado)                                                                                                                           | Configurável por `StorageTarget` | `fs_root_path` obrigatório                                                            |
+| Redis                              | Rate limiting de login distribuído                                                     | Sem autenticação configurada nos composes atuais                                                                                                      | Dev e prod                       | `⚠ inferida`: verificar se produção usa Redis com senha — não confirmado nesta tarefa |
+| Servidor de banco remoto (via SSH) | Origem do dump (`pg_dump`/`mysqldump`/`sqlcmd`, em container Docker ou direto no host) | Chave SSH ed25519 (privada criptografada AES-256-GCM) + TOFU de host key + senha do banco opcional/obrigatória por engine (criptografada AES-256-GCM) | Por `Server`                     | Handshake SSH com timeout obrigatório (RN-BACKUP-015)                                 |
 
 ## Segurança
 
@@ -448,12 +448,12 @@ Antes de alterar:
 
 ## Histórico
 
-| Data | Área | Alteração | ADR | Motivo |
-| --- | --- | --- | --- | --- |
-| 2026-09-15 | Documentação | Documento criado do zero via `/init-project --update`, a partir da leitura do código real (`docs/` estava inteiramente ausente apesar de o `CLAUDE.md` referenciá-lo) | ADR-001, ADR-002, ADR-003 | Governança do projeto estava desatualizada — ver `docs/Progresso.md` |
-| 2026-09-15 | Backend + Frontend | Suporte a múltiplos engines de banco (Postgres/MySQL/SQL Server), modo de implantação Docker-ou-host, senha de banco criptografada, novo módulo `scheduler/dumpcommand.go`, prévia do comando de dump no frontend | ADR-005 | Suporte a MySQL/SQL Server e a bancos rodando direto no host, com prévia do comando remoto no formulário de servidor |
-| 2026-09-15 | Backend + Frontend | Correção de bug (duração de dump/upload não persistida pelo scheduler), novo módulo `scheduler/containerresolve.go` (resolução de container Docker por nome parcial via grep), ativação/desativação manual de servidor (`enabled`), paginação real + filtro por status no histórico (`GET /api/servers/{id}/backup-runs`) | — (extensões dos fluxos existentes, sem ADR novo) | Ver `docs/RegrasNegocio.md` RN-BACKUP-022 a 025 |
-| 2026-09-16 | Backend + Frontend | Novo endpoint `GET /api/backup-runs` (histórico combinando todos os servidores, `BackupRunRepo.ListAll`); `error_message`/`log_output` de backup passam a ter detalhe real redigido de segredo (`redactSecret`/`truncateText`, `MarkFailedWithDetails`); correção do bug de backup preso em `running` para sempre — contador de workers ocupados em `WorkerPool`, timeout por execução (`SetTaskTimeout`, `sshclient.StreamCommand` ganha `ctx`), de-dup na claim (`GetReadyServersForScheduling`), e novo módulo `scheduler/watchdog.go` | ADR-006 | Usuário reportou histórico vazio sem servidor selecionado, log de erro sem detalhe, e um backup agendado que "enfileirou e não fez nada" — ver `docs/RegrasNegocio.md` RN-BACKUP-026 a 028 |
-| 2026-09-16 | Backend | Corrigido o gap de bootstrap de `servers.next_run_at` (novo `scheduler.NextRunTime`, usado por `claimAndEnqueue` e pelo novo `bootstrapNextRunAt` em `httpapi/handlers/server_ssh.go`); novo teste e2e (`scheduler/executor_slog_test.go`) capturando `slog` real contra um servidor SSH de teste, provando que a senha do banco nunca aparece em texto puro no log de uma falha remota — reforço de defesa em profundidade sobre RN-BACKUP-027 | — (extensão de ADR-006/RN-BACKUP-028, sem ADR novo) | Duas pendências registradas em `docs/Progresso.md`/`docs/RegrasNegocio.md` (RN-BACKUP-029) na tarefa anterior — ver `.claude/plans/verifique-o-impacto-e-dapper-duckling.md` |
-| 2026-09-16 | Backend | Resolvido o item de "Pontos a definir" sobre `next_run_at` não recalculado ao editar cron: `ServerHandlers.Update` agora chama `recomputeNextRunAtOnCronChange` (reaproveita `scheduler.NextRunTime`) e novo `ServerRepo.RescheduleNextRunAt` (método dedicado, distinto de `UpdateNextRun` — não toca `last_scheduled_at`, achado do Validator durante esta mesma tarefa) quando `cronExpression` muda em um servidor já agendado | — (extensão pontual, sem ADR novo) | Achado do Validator na tarefa anterior (RN-BACKUP-029, "Caso não previsto") — ver `docs/RegrasNegocio.md` RN-BACKUP-030, `.claude/plans/fa-a-a-analise-e-nested-llama.md` |
-| 2026-09-16 | Backend + Frontend | Novo endpoint `GET /api/dashboard/backup-stats` (`BackupRunRepo.CountAndBytesByDestination`, JOIN com `servers`/`storage_targets`); gráfico de linha do Dashboard substituído por 4 gráficos de barras empilhadas por destino; corrigido bug de timezone no `date_trunc` da nova query durante a implementação | ADR-007 | Usuário pediu que o gráfico do dashboard mostrasse backups e soma de dados por destino, últimos 30 dias e mês a mês do ano atual — ver `docs/RegrasNegocio.md` RN-BACKUP-031, `.claude/plans/Backapeando-2026-09-16-15-23-dashboard-graficos-por-destino.md` |
+| Data       | Área               | Alteração                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | ADR                                                 | Motivo                                                                                                                                                                                                                                                       |
+| ---------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-09-15 | Documentação       | Documento criado do zero via `/init-project --update`, a partir da leitura do código real (`docs/` estava inteiramente ausente apesar de o `CLAUDE.md` referenciá-lo)                                                                                                                                                                                                                                                                                                                                                                     | ADR-001, ADR-002, ADR-003                           | Governança do projeto estava desatualizada — ver `docs/Progresso.md`                                                                                                                                                                                         |
+| 2026-09-15 | Backend + Frontend | Suporte a múltiplos engines de banco (Postgres/MySQL/SQL Server), modo de implantação Docker-ou-host, senha de banco criptografada, novo módulo `scheduler/dumpcommand.go`, prévia do comando de dump no frontend                                                                                                                                                                                                                                                                                                                         | ADR-005                                             | Suporte a MySQL/SQL Server e a bancos rodando direto no host, com prévia do comando remoto no formulário de servidor                                                                                                                                         |
+| 2026-09-15 | Backend + Frontend | Correção de bug (duração de dump/upload não persistida pelo scheduler), novo módulo `scheduler/containerresolve.go` (resolução de container Docker por nome parcial via grep), ativação/desativação manual de servidor (`enabled`), paginação real + filtro por status no histórico (`GET /api/servers/{id}/backup-runs`)                                                                                                                                                                                                                 | — (extensões dos fluxos existentes, sem ADR novo)   | Ver `docs/RegrasNegocio.md` RN-BACKUP-022 a 025                                                                                                                                                                                                              |
+| 2026-09-16 | Backend + Frontend | Novo endpoint `GET /api/backup-runs` (histórico combinando todos os servidores, `BackupRunRepo.ListAll`); `error_message`/`log_output` de backup passam a ter detalhe real redigido de segredo (`redactSecret`/`truncateText`, `MarkFailedWithDetails`); correção do bug de backup preso em `running` para sempre — contador de workers ocupados em `WorkerPool`, timeout por execução (`SetTaskTimeout`, `sshclient.StreamCommand` ganha `ctx`), de-dup na claim (`GetReadyServersForScheduling`), e novo módulo `scheduler/watchdog.go` | ADR-006                                             | Usuário reportou histórico vazio sem servidor selecionado, log de erro sem detalhe, e um backup agendado que "enfileirou e não fez nada" — ver `docs/RegrasNegocio.md` RN-BACKUP-026 a 028                                                                   |
+| 2026-09-16 | Backend            | Corrigido o gap de bootstrap de `servers.next_run_at` (novo `scheduler.NextRunTime`, usado por `claimAndEnqueue` e pelo novo `bootstrapNextRunAt` em `httpapi/handlers/server_ssh.go`); novo teste e2e (`scheduler/executor_slog_test.go`) capturando `slog` real contra um servidor SSH de teste, provando que a senha do banco nunca aparece em texto puro no log de uma falha remota — reforço de defesa em profundidade sobre RN-BACKUP-027                                                                                           | — (extensão de ADR-006/RN-BACKUP-028, sem ADR novo) | Duas pendências registradas em `docs/Progresso.md`/`docs/RegrasNegocio.md` (RN-BACKUP-029) na tarefa anterior — ver `.claude/plans/verifique-o-impacto-e-dapper-duckling.md`                                                                                 |
+| 2026-09-16 | Backend            | Resolvido o item de "Pontos a definir" sobre `next_run_at` não recalculado ao editar cron: `ServerHandlers.Update` agora chama `recomputeNextRunAtOnCronChange` (reaproveita `scheduler.NextRunTime`) e novo `ServerRepo.RescheduleNextRunAt` (método dedicado, distinto de `UpdateNextRun` — não toca `last_scheduled_at`, achado do Validator durante esta mesma tarefa) quando `cronExpression` muda em um servidor já agendado                                                                                                        | — (extensão pontual, sem ADR novo)                  | Achado do Validator na tarefa anterior (RN-BACKUP-029, "Caso não previsto") — ver `docs/RegrasNegocio.md` RN-BACKUP-030, `.claude/plans/fa-a-a-analise-e-nested-llama.md`                                                                                    |
+| 2026-09-16 | Backend + Frontend | Novo endpoint `GET /api/dashboard/backup-stats` (`BackupRunRepo.CountAndBytesByDestination`, JOIN com `servers`/`storage_targets`); gráfico de linha do Dashboard substituído por 4 gráficos de barras empilhadas por destino; corrigido bug de timezone no `date_trunc` da nova query durante a implementação                                                                                                                                                                                                                            | ADR-007                                             | Usuário pediu que o gráfico do dashboard mostrasse backups e soma de dados por destino, últimos 30 dias e mês a mês do ano atual — ver `docs/RegrasNegocio.md` RN-BACKUP-031, `.claude/plans/Backapeando-2026-09-16-15-23-dashboard-graficos-por-destino.md` |

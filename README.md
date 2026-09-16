@@ -2,6 +2,10 @@
 
 Sistema de gestão de backups de bancos de dados PostgreSQL via SSH com retenção configurável (GFS), upload para múltiplos destinos de armazenamento (Azure Blob Storage, S3-compatível, filesystem/NFS), e interface web para automação.
 
+## System Architecture
+
+[`docs/arquitetura.html`](.docs/arquitetura.html)
+
 ## Quick Start (Development)
 
 ```bash
@@ -28,9 +32,9 @@ docker-compose down
 
 ## Architecture
 
-- **Backend**: Go 1.26+ (stdlib net/http, pgx, crypto/*)
+- **Backend**: Go 1.26+ (stdlib net/http, pgx, crypto/\*)
 - **Frontend**: Vue 3 + Vite + TypeScript + Tailwind CSS
-- **Database**: PostgreSQL 16+
+- **Database**: PostgreSQL 18+
 - **Cache/Rate Limiting**: Redis 7
 - **Deployment**: Docker Swarm; Traefik (reverse proxy) e Portainer (UI) geridos externamente
 
@@ -82,7 +86,7 @@ docs/                    # Governance & architecture documentation
 - Go 1.26+
 - Node.js 20+
 - Docker & Docker Compose
-- PostgreSQL 16 (via Docker)
+- PostgreSQL 18 (via Docker)
 
 ### Backend Setup
 
@@ -251,18 +255,18 @@ Key endpoint groups:
 
 ### Environment Variables
 
-| Variable                      | Default                         | Required | Purpose                                                         |
-| ----------------------------- | ------------------------------- | -------- | --------------------------------------------------------------- |
-| `DATABASE_URL`                | —                               | Yes      | PostgreSQL connection string (or `_FILE` variant for Swarm)     |
-| `MASTER_ENCRYPTION_KEY`       | —                               | Yes      | 32-byte AES-256 key in base64 (or `_FILE` variant for Swarm)    |
-| `MASTER_ENCRYPTION_KEY_PREVIOUS` | —                             | No       | Previous key for rotation (see `docs/Infraestrutura.md`)        |
-| `HTTP_ADDR`                   | `:8081`                         | No       | HTTP server address                                             |
-| `SESSION_COOKIE_NAME`         | `backapeando_backup_session`    | No       | HTTP cookie name for sessions                                   |
-| `SESSION_IDLE_TTL`            | `43200` (12h, in seconds)       | No       | Session inactivity timeout                                      |
-| `SESSION_ABSOLUTE_TTL`        | `604800` (7d, in seconds)       | No       | Max session lifetime                                            |
-| `SECURE_COOKIES`              | —                               | Yes      | Must be exactly `"true"` or `"false"` (no implicit default)     |
-| `CORS_ALLOWED_ORIGIN`         | (empty)                         | No       | Enable CORS for exactly one origin; never use `*`               |
-| `REDIS_URL`                   | (empty)                         | No       | Redis URL for distributed rate limiting (e.g., `redis://...`)   |
+| Variable                         | Default                      | Required | Purpose                                                       |
+| -------------------------------- | ---------------------------- | -------- | ------------------------------------------------------------- |
+| `DATABASE_URL`                   | —                            | Yes      | PostgreSQL connection string (or `_FILE` variant for Swarm)   |
+| `MASTER_ENCRYPTION_KEY`          | —                            | Yes      | 32-byte AES-256 key in base64 (or `_FILE` variant for Swarm)  |
+| `MASTER_ENCRYPTION_KEY_PREVIOUS` | —                            | No       | Previous key for rotation (see `docs/Infraestrutura.md`)      |
+| `HTTP_ADDR`                      | `:8081`                      | No       | HTTP server address                                           |
+| `SESSION_COOKIE_NAME`            | `backapeando_backup_session` | No       | HTTP cookie name for sessions                                 |
+| `SESSION_IDLE_TTL`               | `43200` (12h, in seconds)    | No       | Session inactivity timeout                                    |
+| `SESSION_ABSOLUTE_TTL`           | `604800` (7d, in seconds)    | No       | Max session lifetime                                          |
+| `SECURE_COOKIES`                 | —                            | Yes      | Must be exactly `"true"` or `"false"` (no implicit default)   |
+| `CORS_ALLOWED_ORIGIN`            | (empty)                      | No       | Enable CORS for exactly one origin; never use `*`             |
+| `REDIS_URL`                      | (empty)                      | No       | Redis URL for distributed rate limiting (e.g., `redis://...`) |
 
 See [`backend/.env.example`](./backend/.env.example) for template.
 
@@ -343,12 +347,11 @@ docker push registry.example.com/backapeando-web:v1.0.0
 
 ## Contributing
 
-1. Read [`CLAUDE.md`](./CLAUDE.md) for conventions
-2. Create a feature branch
-3. Follow test-driven development (write tests first)
-4. Run `go test`, `go vet`, `gofmt` (backend) + `npm test`, `npm run lint` (frontend)
-5. Update relevant docs (see [docs](./docs/) directory)
-6. Submit pull request
+1. Create a feature branch
+2. Follow test-driven development (write tests first)
+3. Run `go test`, `go vet`, `gofmt` (backend) + `npm test`, `npm run lint` (frontend)
+4. Update relevant docs (see [docs](./docs/) directory)
+5. Submit pull request
 
 ## License
 
