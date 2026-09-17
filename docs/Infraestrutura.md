@@ -118,6 +118,8 @@ não versionado, com `.env.example` documentando apenas o nome da variável.
 
 ## Build
 
+### Localmente
+
 ```bash
 # Backend
 cd backend && go build ./...
@@ -131,6 +133,41 @@ docker-compose build
 # Imagens (prod) — pipeline de CI/CD ainda não coberto para o worker
 docker stack deploy -c docker-compose.prod.yml backapeando-backup
 ```
+
+### Build e push para Docker Hub (script automatizado)
+
+Script: `build-images.sh` (raiz do projeto)
+
+```bash
+# Pré-requisito: autenticação manual no Docker Hub
+docker login -u c3t4r4
+
+# Build das 3 imagens (backend/api, worker, frontend) e push para Docker Hub
+# com versão automaticamente incrementada e commit de prod-version
+./build-images.sh
+```
+
+**Fluxo:**
+
+1. Lê versão atual de `prod-version` (formato: `vMAJOR.MINOR.PATCH`)
+2. Incrementa patch: `v1.0.0` → `v1.0.1`
+3. Builda 3 imagens com 2 tags cada:
+   - `c3t4r4/backapeando:backend-v1.0.1` + `backend-latest`
+   - `c3t4r4/backapeando:worker-v1.0.1` + `worker-latest`
+   - `c3t4r4/backapeando:frontend-v1.0.1` + `frontend-latest`
+4. Se todas as builds completarem com sucesso, faz push de todas as tags
+5. Se push completar com sucesso, escreve a nova versão em `prod-version` e commita
+
+**Segurança:**
+
+- Script assume `docker login` já feito manualmente (não lida com credenciais)
+- Se qualquer etapa falhar (build ou push), `prod-version` **não é atualizado** e nenhum commit acontece
+- Usa `set -euo pipefail` para falha rápida em qualquer erro
+- Git staging restrito a `prod-version` (nunca `git add -A`)
+
+**Configuração:**
+
+Nenhuma. O script é determinístico e lê tudo do repositório (`prod-version`, Dockerfiles, docker build contexts).
 
 ## Deploy
 
@@ -214,3 +251,4 @@ Não coberto neste repositório para produção — o serviço já está declara
 | 2026-09-16 | Novas env vars `BACKUP_TASK_TIMEOUT` (default 6h) e `WATCHDOG_POLL_INTERVAL` (default 5min) no `worker` — não adicionadas aos `docker-compose*.yml` (usam o default do código; adicionar explicitamente se o operador quiser um valor diferente) | dev, prod | Corrigir backup preso em `running` para sempre (nenhum timeout após o handshake SSH) | `.claude/plans/Backapeando-2026-09-16-09-19-historico-todos-servidores-erro-detalhado-fix-cron.md` |
 | 2026-09-16 | Novo workflow `.github/workflows/deploy-arquitetura-pages.yml` para publicar `docs/arquitetura.html` no GitHub Pages; README atualizado com link renderizado | ci/cd | Publicar diagrama de arquitetura de forma interativa e acessível no GitHub Pages | `.claude/plans/Backapeando-2026-09-16-preciso-que-crie-um-actions-github-pages-arquitetura.md` |
 | 2026-09-17 | `scheduler.NextRunTime` agora interpreta cron em America/Sao_Paulo fixo (via `time.LoadLocation`, não só env var); `import _ "time/tzdata"` embutido em `cmd/worker/main.go` e `cmd/api/main.go`; `ENV TZ=America/Sao_Paulo` adicionado a todos os containers em `docker-compose.yml` (dev) e `docker-compose.prod.yml` (prod); Dockerfiles recebem comentário documentando fix | dev, prod | Corrigir cron `0 3 * * *` disparando às 00:00 (UTC) em vez de 03:00 (Brasil) — causa raiz: `time.Now()` sem fuso explícito no code + container sem `TZ` nem acesso a banco IANA | `.claude/plans/Backapeando-2026-09-17-cron-timezone-america-sao-paulo.md` |
+| 2026-09-17 | Novo script `build-images.sh` (raiz) para build e push de 3 imagens (`backend`, `worker`, `frontend`) para Docker Hub (`c3t4r4/backapeando:*`) com versionamento automático (incrementa patch de `prod-version` e commita ao fim, somente se tudo tiver sucesso) | ci/cd | Script de deploy/build para produção — substitui o processo manual de build/push das imagens | `.claude/plans/use-o-script-build-images-sh-wiggly-quokka.md` |
