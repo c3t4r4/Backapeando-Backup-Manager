@@ -175,7 +175,10 @@ func TestBootstrapNextRunAt_FirstTimeReady(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected a non-nil next_run_at, got nil (this is exactly the bootstrap bug)")
 	}
-	want := time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC)
+	// NextRunTime now always interprets in America/Sao_Paulo, so from 2026-01-01 00:00 UTC
+	// (= 2026-12-31 21:00 in Sao Paulo), next 3am is 2026-01-01 06:00 UTC (= 03:00 Sao Paulo)
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	want := time.Date(2026, 1, 1, 3, 0, 0, 0, loc).UTC()
 	if !got.Equal(want) {
 		t.Errorf("got %v, want %v", got, want)
 	}

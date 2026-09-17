@@ -387,6 +387,40 @@ pg_dump`). O usuário pediu suporte a MySQL e SQL Server, além da opção de
   (`date_trunc(unit, br.created_at AT TIME ZONE 'UTC')`); pego por um teste
   de integração que validava o primeiro dia do mês do bucket mensal.
 
+### ADR-008 — Cron sempre interpretado em America/Sao_Paulo, não UTC
+
+- Status: aceita
+- Contexto: bug report (2026-09-17) — cron `0 3 * * *` (esperado: 3am) disparava
+  às 00:00 (meia-noite, 3h antes). Causa raiz: `scheduler.NextRunTime` usa
+  `cron.Next(from)` onde `from = time.Now()` (a hora do Go no container), e o
+  container não tinha `TZ` configurado nem acesso a banco de fusos horários
+  (Alpine sem `tzdata`), logo `time.Now()` resolvia para UTC. Resultado:
+  `cron.ParseStandard("0 3 * * *").Next(time.Now())` calculava "3am UTC" =
+  "00:00 America/Sao_Paulo" exatamente.
+- Decisão: (1) `NextRunTime` agora carrega `time.LoadLocation("America/Sao_Paulo")`
+  (lazy, cacheado) e converte `from` para essa location antes de chamar
+  `cronExpr.Next(from.In(loc))`, garantindo que "3h" sempre significa "3h no
+  Brasil" independente da timezone do processo ou máquina. (2) Ambos entrypoints
+  (`backend/cmd/api/main.go`, `backend/cmd/worker/main.go`) importam
+  `_ "time/tzdata"` (blank import, sem código), que embutida o banco IANA de
+  fusos horários no binário Go, dispensando `apk add tzdata` nos Dockerfiles
+  (segunda fonte de verdade para o mesmo dado). (3) `ENV TZ=America/Sao_Paulo`
+  adicionado a todos os containers de app (`api`, `worker`, `postgres`, `redis`)
+  em `docker-compose.yml` (dev) e `docker-compose.prod.yml` (prod), para que
+  `time.Local` e exibição de logs também reflitam Brasil. (4) Dockerfiles
+  (`backend/cmd/api/Dockerfile`, `backend/cmd/worker/Dockerfile`) ganham `ENV TZ`
+  com comentário documentando que `time/tzdata` dispensa `tzdata` package.
+- Alternativas: fixar apenas via `ENV TZ` (mais frágil — não impede um container
+  ganhar um `TZ` diferente no futuro); usar UTC internamente e converter só na
+  UI (mais complexo, dispersa a lógica).
+- Consequências: servidores com `next_run_at` já calculado em UTC (antes desta
+  correção) continuarão com esse valor até recálculo natural (próximo
+  `claimAndEnqueue` após o cron antigo disparar, ou edição manual do cron via
+  `PUT /api/servers/{id}` que recalcula imediatamente por RN-BACKUP-030). Sem
+  fix retroativo neste plano — defesa em profundidade (código + env) contra
+  recorrência é mais valiosa do que limpeza histórica de `next_run_at`.
+- Documentado como RN-BACKUP-032 (confirmada).
+
 ## Banco de dados
 
 - Banco: PostgreSQL 18+

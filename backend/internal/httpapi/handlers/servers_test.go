@@ -22,7 +22,10 @@ func TestRecomputeNextRunAtOnCronChange_CronChangedAndAlreadyScheduled(t *testin
 	if got == nil {
 		t.Fatal("expected a recomputed next_run_at, got nil")
 	}
-	want := time.Date(2026, 1, 1, 5, 0, 0, 0, time.UTC)
+	// NextRunTime now always interprets in America/Sao_Paulo, so from 2026-01-01 00:00 UTC
+	// (= 2026-12-31 21:00 in Sao Paulo), next 5am is 2026-01-01 08:00 UTC (= 05:00 Sao Paulo)
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	want := time.Date(2026, 1, 1, 5, 0, 0, 0, loc).UTC()
 	if !got.Equal(want) {
 		t.Errorf("got %v, want %v", *got, want)
 	}

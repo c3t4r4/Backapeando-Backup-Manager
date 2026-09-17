@@ -3,7 +3,7 @@
 ## Status atual
 
 - Estado: EM DESENVOLVIMENTO
-- Última atualização: 2026-09-16 (Dashboard: gráficos de backups e dados por destino)
+- Última atualização: 2026-09-17 (Correção de timezone do cron + RN-BACKUP-032 + ADR-008)
 - Branch atual: `main` (única branch, sem remote)
 
 ## Em andamento
@@ -51,6 +51,7 @@
 - [ ] **Achado do Security Specialist (2026-09-16, baixo, não bloqueante):** `upsertServerRequest.validate` (`httpapi/handlers/servers.go`) não valida o formato de `cronExpression` em nenhum ponto (`Create` ou `Update`) — um cron malformado é aceito silenciosamente pela API (`200`/`201`) e só degrada graciosamente mais tarde (bootstrap/recompute logam warning e deixam `next_run_at` como estava, scheduler nunca reivindica o servidor). Não é uma regressão desta tarefa (comportamento pré-existente), mas ficou mais visível ao adicionar um terceiro ponto de leitura desse campo. Possível correção: validar com `cron.ParseStandard` dentro de `validate()` e retornar `400` no `PUT`/`POST` quando o cron for inválido.
 - [ ] **Achado do Security Specialist e do Validator (2026-09-16, baixo, não bloqueante):** `BackupRunRepo.CountAndBytesByDestination` (RN-BACKUP-031) filtra só por `created_at`, sem predicado de `server_id` — o índice existente `idx_backup_runs_server_id (server_id, created_at DESC)` não ajuda tanto quanto se poderia supor, já que sua utilidade depende de uma condição de igualdade na coluna líder (`server_id`), ausente aqui. Não é vetor de DoS explorável hoje (endpoint sem parâmetros de request, sistema single-role, volume esperado baixo — uso interno, poucos servidores). Possível correção futura, só se o volume de `backup_runs` crescer muito: `CREATE INDEX idx_backup_runs_created_at ON backup_runs(created_at)`.
 - [ ] **Pendente pré-existente, não relacionado a esta tarefa:** `docs/arquitetura.html` tem overflow de viewport em telas desktop grandes (1440x900 até 2048x1320, `scrollHeight` excede `innerHeight` em ~300-450px, ambos os temas) — confirmado pelo agente que rodou a skill `archify` nesta tarefa que o problema já existia antes (diff desta tarefa nesse arquivo é só um rótulo cosmético de 2 linhas). Corrigir exigiria uma passada de `archify` compactando o espaçamento vertical ou aumentando o `viewBox`, fora do escopo desta tarefa.
+- [x] ~~Cron de servidor dispara 3h cedo (0 3 * * * → 00:00 em vez de 03:00) — bug de timezone; container sem TZ, processo Go usa UTC, cron.Next() calcula "3am UTC" = "00:00 Brasil".~~ — **corrigido em 2026-09-17**: `scheduler.NextRunTime` agora força `time.LoadLocation("America/Sao_Paulo")` + `from.In(loc)` antes de `cron.Next()`; ambos entrypoints importam `_ "time/tzdata"` (embutir banco IANA); `ENV TZ=America/Sao_Paulo` em todos os containers (dev e prod). Ver RN-BACKUP-032, ADR-008.
 
 ## Bloqueios
 

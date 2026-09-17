@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"golang.org/x/term"
 

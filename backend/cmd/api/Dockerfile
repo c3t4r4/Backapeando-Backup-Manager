@@ -37,6 +37,11 @@ RUN chown -R appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
+# Set timezone to America/Sao_Paulo for consistent cron scheduling.
+# The Go binary embeds tzdata via `import _ "time/tzdata"`, so this does not
+# require tzdata package to be installed in the image.
+ENV TZ=America/Sao_Paulo
+
 # Expose port
 EXPOSE 8081
 

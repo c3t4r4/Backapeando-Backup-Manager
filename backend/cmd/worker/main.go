@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"backapeando-backup-manager/internal/config"
 	"backapeando-backup-manager/internal/crypto"
