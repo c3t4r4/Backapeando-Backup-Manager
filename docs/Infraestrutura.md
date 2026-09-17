@@ -171,13 +171,54 @@ Nenhuma. O script é determinístico e lê tudo do repositório (`prod-version`,
 
 ## Deploy
 
+### Docker Swarm (Portainer)
+
+**Importante:** `docker-stack.yml` (e `docker-compose.prod.yml`) são para uso com Docker Swarm via Portainer, não com `docker-compose` tradicional (Compose).
+
+#### Incompatibilidade: `depends_on` com condições
+
+Docker Swarm **não suporta** a sintaxe longa de `depends_on` com `condition:` (ex.: `condition: service_healthy`), que é suportada apenas pelo Compose tradicional. Qualquer tentativa de usar essa sintaxe em `docker stack deploy` resulta em erro ou silêncio ignorado — **não há garantia de ordem de inicialização dos serviços**.
+
+**Compensação em `docker-stack.yml`:**
+
+1. **`api` e `worker`** (que fazem conexão síncrona em startup e falham rápido sem retry):
+   - Removidos blocos `depends_on:`
+   - `restart_policy` alterado para **omitir `max_attempts`** (deixando-o ilimitado no Swarm)
+   - Comportamento resultante: crash-loop (a cada 10s) até Postgres e Redis ficarem saudáveis
+   - O Go app (`backend/internal/db/migrate.go`, `backend/internal/auth/ratelimit.go`) chama `os.Exit(1)` se Postgres/Redis não responderem — crash-loop é a única compensação disponível
+
+2. **`web`** (nginx frontend):
+   - Removido `depends_on: [api]`
+   - `restart_policy` **não alterado** (mantém `max_attempts: 5`)
+   - Motivo: `frontend/nginx.conf` usa `resolver 127.0.0.11 valid=10s` + `proxy_pass` com variable (`set $backend_upstream http://api:8081;`), que adia DNS resolution para request-time (não startup), tornando nginx resiliente a api indisponível no boot
+   - Resultado: nginx sobe normalmente mesmo sem `api`, requests falham com 5xx até `api` ficar resolvível (~10s), então self-healam
+
 ### Procedimento
 
-1. `a definir` — procedimento de deploy em produção não documentado nesta tarefa; consultar quem opera o Swarm/Traefik/Portainer (geridos fora deste repositório).
+1. Configurar variáveis de ambiente em `.env` (não versionado):
+   ```bash
+   # .env (criar na raiz, adicionar a .gitignore se não estiver)
+   PG_HOST=postgres
+   PG_PORT=5432
+   PG_DBNAME=...
+   PG_USER=...
+   PG_PASSWORD=...
+   MASTER_ENCRYPTION_KEY=...
+   APP_DOMAIN=...
+   ```
+
+2. Deploy via `docker stack deploy`:
+   ```bash
+   docker stack deploy -c docker-stack.yml backapeando
+   ```
+
+3. Monitorar logs inicial de crash-loop esperado:
+   - `api` e `worker` podem fazer crash-loop por ~10-50s enquanto Postgres/Redis inicializam
+   - `web` sobe normalmente mas requests falham com 5xx até `api` estar healthy
 
 ### Rollback
 
-1. `a definir`
+1. `a definir` — procedimento de rollback em produção não documentado nesta tarefa; consultar quem opera o Swarm/Traefik/Portainer (geridos fora deste repositório).
 
 - Tempo estimado de rollback: `a definir`
 - Responsável: `a definir`

@@ -1,0 +1,192 @@
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      TZ: America/Sao_Paulo
+      POSTGRES_DB: ${PG_DBNAME}
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PORT: ${PG_PORT}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=pt_BR.UTF-8"
+    volumes:
+      - backup_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ${PG_DBNAME} -h localhost -p ${PG_PORT}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == server-swarm-02
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+
+  # Backend API
+  api:
+    image: c3t4r4/backapeando:backend-latest
+    environment:
+      TZ: America/Sao_Paulo
+      DATABASE_URL: "postgres://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${PG_DBNAME}?sslmode=disable"
+      MASTER_ENCRYPTION_KEY: "${MASTER_ENCRYPTION_KEY}"
+      HTTP_ADDR: ":8081"
+      SECURE_COOKIES: "false" # dev only
+      REDIS_URL: "redis://redis:6379"
+      REDIS_DB: "0"
+    # Note: Docker Swarm does not support depends_on with conditions (long-form
+    # Compose syntax). Removed depends_on; resilience instead relies on:
+    # 1) restart_policy with unlimited retries (no max_attempts) to crash-loop
+    #    until Postgres and Redis are healthy (app fails fast without retry)
+    # 2) Go app startup order: Migrate() connects to Postgres first (fails if
+    #    unavailable), then NewRedisRateLimiter() for Redis (fails if unavailable)
+    # 3) 10s delay between retries should allow healthy startup sequencing
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8081/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - internal
+    volumes:
+      - backup_api_app:/app
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == server-swarm-02
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        # max_attempts omitted (unlimited retries in Swarm) — allows crash-loop
+        # until Postgres/Redis healthy, rather than failing permanently after 5 attempts
+
+  # Backup scheduler worker (polls backup_runs / servers, executes backups)
+  worker:
+    image: c3t4r4/backapeando:worker-latest
+    environment:
+      TZ: America/Sao_Paulo
+      DATABASE_URL: "postgres://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${PG_DBNAME}?sslmode=disable"
+      MASTER_ENCRYPTION_KEY: "${MASTER_ENCRYPTION_KEY}"
+      SECURE_COOKIES: "true" # unused by the worker, but config.Load() requires it to be set
+      MAX_CONCURRENT_BACKUPS: "3"
+      SCHEDULER_POLL_INTERVAL: "30"
+      GRACEFUL_SHUTDOWN_TIMEOUT: "300"
+    # Note: Docker Swarm does not support depends_on with conditions (long-form
+    # Compose syntax). Removed depends_on; resilience instead relies on:
+    # 1) restart_policy with unlimited retries (no max_attempts) to crash-loop
+    #    until Postgres is healthy (app fails fast without retry)
+    # 2) Go app startup: Migrate() connects to Postgres first (fails if unavailable)
+    # 3) 10s delay between retries should allow healthy startup sequencing
+    networks:
+      - internal
+    volumes:
+      - backup_worker_app:/app
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == server-swarm-02
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        # max_attempts omitted (unlimited retries in Swarm) — allows crash-loop
+        # until Postgres is healthy, rather than failing permanently after 5 attempts
+
+  # Frontend (Nginx)
+  web:
+    image: c3t4r4/backapeando:frontend-latest
+    environment:
+      TZ: America/Sao_Paulo
+    # Note: Docker Swarm does not support depends_on (only Compose long-form
+    # with conditions does). Removed depends_on: [api]. Nginx is resilient to
+    # api not being available at container start time because:
+    # 1) frontend/nginx.conf declares resolver 127.0.0.11 valid=10s
+    # 2) proxy_pass uses a variable: set $backend_upstream http://api:8081;
+    #    This defers DNS resolution to request time, not container startup time
+    # 3) If api is unavailable, requests fail with 5xx until api becomes
+    #    resolvable (checked every 10s), then self-heal automatically
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - internal
+      - minha_rede
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == server-swarm-02
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        # web does NOT need unlimited retries (unlike api/worker), because
+        # nginx's dynamic DNS resolution means it never crashes due to api
+        # unavailability — requests just fail until api becomes resolvable
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=minha_rede
+        - traefik.http.middlewares.redirect-https.redirectscheme.scheme=https
+        - traefik.http.middlewares.redirect-https.redirectscheme.permanent=true
+        - traefik.http.routers.backapeando-https.service=backapeando
+        - traefik.http.routers.backapeando-https.rule=Host(`${APP_DOMAIN}`)
+        - traefik.http.routers.backapeando-https.entrypoints=websecure
+        - traefik.http.routers.backapeando-https.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.backapeando-https.tls=true
+        - traefik.http.routers.backapeando-https.priority=1
+        - traefik.http.services.backapeando.loadbalancer.server.port=80
+
+  # Redis (for rate limiting)
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    volumes:
+      - backup_redis_data:/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == server-swarm-02
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 128M
+
+networks:
+  internal:
+  minha_rede:
+    external: true
+
+volumes:
+  backup_postgres_data:
+  backup_redis_data:
+  backup_api_app:
+  backup_worker_app:
