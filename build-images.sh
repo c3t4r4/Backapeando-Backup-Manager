@@ -49,6 +49,7 @@ for i in "${!names[@]}"; do
 
   echo "Building ${name}..."
   docker build \
+    --platform linux/amd64 \
     -f "$dockerfile" \
     -t "c3t4r4/backapeando:${name}-${NEW_VERSION}" \
     -t "c3t4r4/backapeando:${name}-latest" \

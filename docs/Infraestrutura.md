@@ -151,7 +151,8 @@ docker login -u c3t4r4
 
 1. Lê versão atual de `prod-version` (formato: `vMAJOR.MINOR.PATCH`)
 2. Incrementa patch: `v1.0.0` → `v1.0.1`
-3. Builda 3 imagens com 2 tags cada:
+3. Builda 3 imagens para `linux/amd64` (plataforma do servidor de produção; usa emulação/QEMU via
+   buildx quando o host local for arm64) com 2 tags cada:
    - `c3t4r4/backapeando:backend-v1.0.1` + `backend-latest`
    - `c3t4r4/backapeando:worker-v1.0.1` + `worker-latest`
    - `c3t4r4/backapeando:frontend-v1.0.1` + `frontend-latest`
@@ -293,3 +294,4 @@ Não coberto neste repositório para produção — o serviço já está declara
 | 2026-09-16 | Novo workflow `.github/workflows/deploy-arquitetura-pages.yml` para publicar `docs/arquitetura.html` no GitHub Pages; README atualizado com link renderizado | ci/cd | Publicar diagrama de arquitetura de forma interativa e acessível no GitHub Pages | `.claude/plans/Backapeando-2026-09-16-preciso-que-crie-um-actions-github-pages-arquitetura.md` |
 | 2026-09-17 | `scheduler.NextRunTime` agora interpreta cron em America/Sao_Paulo fixo (via `time.LoadLocation`, não só env var); `import _ "time/tzdata"` embutido em `cmd/worker/main.go` e `cmd/api/main.go`; `ENV TZ=America/Sao_Paulo` adicionado a todos os containers em `docker-compose.yml` (dev) e `docker-compose.prod.yml` (prod); Dockerfiles recebem comentário documentando fix | dev, prod | Corrigir cron `0 3 * * *` disparando às 00:00 (UTC) em vez de 03:00 (Brasil) — causa raiz: `time.Now()` sem fuso explícito no code + container sem `TZ` nem acesso a banco IANA | `.claude/plans/Backapeando-2026-09-17-cron-timezone-america-sao-paulo.md` |
 | 2026-09-17 | Novo script `build-images.sh` (raiz) para build e push de 3 imagens (`backend`, `worker`, `frontend`) para Docker Hub (`c3t4r4/backapeando:*`) com versionamento automático (incrementa patch de `prod-version` e commita ao fim, somente se tudo tiver sucesso) | ci/cd | Script de deploy/build para produção — substitui o processo manual de build/push das imagens | `.claude/plans/use-o-script-build-images-sh-wiggly-quokka.md` |
+| 2026-09-17 | `build-images.sh` passa a builda as 3 imagens com `--platform linux/amd64` explícito no `docker build` | ci/cd | Servidor de produção roda `linux/amd64`; sem o flag, a imagem herdava a arquitetura nativa do host local (risco de imagem arm64 incompatível ao buildar em Mac Apple Silicon) | `.claude/plans/backapeando-2026-09-17-build-images-amd64.md` |

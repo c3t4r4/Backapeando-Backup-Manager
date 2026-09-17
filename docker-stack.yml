@@ -39,13 +39,6 @@ services:
       SECURE_COOKIES: "false" # dev only
       REDIS_URL: "redis://redis:6379"
       REDIS_DB: "0"
-    # Note: Docker Swarm does not support depends_on with conditions (long-form
-    # Compose syntax). Removed depends_on; resilience instead relies on:
-    # 1) restart_policy with unlimited retries (no max_attempts) to crash-loop
-    #    until Postgres and Redis are healthy (app fails fast without retry)
-    # 2) Go app startup order: Migrate() connects to Postgres first (fails if
-    #    unavailable), then NewRedisRateLimiter() for Redis (fails if unavailable)
-    # 3) 10s delay between retries should allow healthy startup sequencing
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:8081/api/health"]
       interval: 30s
@@ -63,8 +56,6 @@ services:
       restart_policy:
         condition: on-failure
         delay: 10s
-        # max_attempts omitted (unlimited retries in Swarm) — allows crash-loop
-        # until Postgres/Redis healthy, rather than failing permanently after 5 attempts
 
   # Backup scheduler worker (polls backup_runs / servers, executes backups)
   worker:
