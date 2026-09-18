@@ -36,7 +36,7 @@
           </div>
           <div class="flex justify-between gap-4">
             <dt class="font-semibold text-gray-700">Nome do blob</dt>
-            <dd data-testid="detail-blob-name" class="truncate">
+            <dd data-testid="detail-blob-name" class="min-w-0 break-all text-right">
               {{ backup.blobName ?? '—' }}
             </dd>
           </div>
