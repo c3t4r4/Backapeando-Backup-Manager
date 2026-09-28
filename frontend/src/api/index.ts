@@ -69,6 +69,20 @@ export async function getMe(): Promise<AuthResponse> {
 }
 
 // ============================================================================
+// Health / System Endpoints
+// ============================================================================
+
+/**
+ * GET /api/health
+ * Get system health and version
+ * Public endpoint, no auth required
+ */
+export async function getHealth(): Promise<{ status: string; version: string }> {
+  const { data } = await client.get<{ status: string; version: string }>('/health')
+  return data
+}
+
+// ============================================================================
 // Server Endpoints
 // ============================================================================
 

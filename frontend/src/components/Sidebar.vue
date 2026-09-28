@@ -1,5 +1,5 @@
 <template>
-  <nav class="bg-gray-800 text-white w-64 p-4 overflow-y-auto">
+  <nav class="bg-gray-800 text-white w-64 p-4 overflow-y-auto flex flex-col h-screen">
     <ul class="space-y-2">
       <li v-for="item in items" :key="item.href">
         <router-link
@@ -11,10 +11,17 @@
         </router-link>
       </li>
     </ul>
+    <div class="mt-auto pt-4 border-t border-gray-700 text-sm text-gray-400">
+      <p v-if="version" :data-testid="'version-display'">v{{ version }}</p>
+      <p v-else class="text-xs text-gray-500">version unavailable</p>
+    </div>
   </nav>
 </template>
 
 <script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { getHealth } from '../api'
+
 interface MenuItem {
   label: string
   href: string
@@ -35,4 +42,15 @@ withDefaults(
     ],
   }
 )
+
+const version = ref<string>('')
+
+onMounted(async () => {
+  try {
+    const health = await getHealth()
+    version.value = health.version
+  } catch {
+    // silently fail — version not available is not a blocker
+  }
+})
 </script>

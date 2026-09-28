@@ -27,6 +27,8 @@ import (
 	"backapeando-backup-manager/internal/repository"
 )
 
+var Version = "dev"
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -102,6 +104,7 @@ func runServer() error {
 		RateLimiter:       rateLimiter,
 		SecureCookies:     cfg.SecureCookies,
 		CORSAllowedOrigin: cfg.CORSAllowedOrigin,
+		Version:           Version,
 	})
 
 	slog.Info("api_starting", "addr", cfg.HTTPAddr)

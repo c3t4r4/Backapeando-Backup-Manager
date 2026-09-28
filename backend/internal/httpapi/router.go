@@ -6,6 +6,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -23,6 +24,7 @@ type Deps struct {
 	RateLimiter       auth.RateLimiter
 	SecureCookies     bool
 	CORSAllowedOrigin string
+	Version           string
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -56,7 +58,8 @@ func NewRouter(deps Deps) http.Handler {
 	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		jsonResp := fmt.Sprintf(`{"status":"ok","version":"%s"}`, deps.Version)
+		_, _ = w.Write([]byte(jsonResp))
 	}
 	mux.HandleFunc("GET /healthz", healthHandler)
 	mux.HandleFunc("GET /api/health", healthHandler)

@@ -13,8 +13,9 @@ RUN go mod download
 # Copy entire source
 COPY . .
 
-# Compile binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/api ./cmd/api
+# Compile binary with version injection
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags "-X main.Version=${VERSION}" -o /app/api ./cmd/api
 
 # Runtime stage: minimal Alpine image
 FROM alpine:latest
