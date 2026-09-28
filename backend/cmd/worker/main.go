@@ -97,7 +97,7 @@ func runWorker() error {
 	executor := scheduler.NewBackupExecutor(pool, repos, sealer, slog.Default())
 
 	// Create and start scheduler
-	sched := scheduler.NewScheduler(workerPool, repos, executor, pollInterval, slog.Default())
+	sched := scheduler.NewScheduler(workerPool, repos, executor, sealer, pollInterval, slog.Default())
 	sched.Start()
 
 	// Create and start the watchdog (staleAfter uses the same duration as

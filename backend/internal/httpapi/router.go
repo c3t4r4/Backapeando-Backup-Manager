@@ -51,6 +51,7 @@ func NewRouter(deps Deps) http.Handler {
 	}
 	dashboardHandlers := &handlers.DashboardHandlers{Servers: deps.Repos.Servers, BackupRuns: deps.Repos.BackupRuns, StorageTargets: deps.Repos.StorageTargets}
 	adminUserHandlers := &handlers.AdminUserHandlers{Users: deps.Repos.AdminUsers}
+	retentionSweepHandlers := &handlers.RetentionSweepHandlers{Requests: deps.Repos.RetentionSweepRequests}
 
 	mux := http.NewServeMux()
 
@@ -105,6 +106,9 @@ func NewRouter(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/admin-users/{id}", adminUserHandlers.Get)
 	mux.HandleFunc("PUT /api/admin-users/{id}", adminUserHandlers.Update)
 	mux.HandleFunc("DELETE /api/admin-users/{id}", adminUserHandlers.Delete)
+
+	mux.HandleFunc("POST /api/retention-sweep", retentionSweepHandlers.Trigger)
+	mux.HandleFunc("GET /api/retention-sweep/latest", retentionSweepHandlers.Latest)
 
 	// Every /api/ route except auth/login and healthz requires a valid
 	// session; mutating requests additionally require a matching CSRF

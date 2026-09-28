@@ -258,6 +258,36 @@ func (r *ServerRepo) GetReadyServersForScheduling(ctx context.Context, limit int
 	return out, nil
 }
 
+// ListEligibleForSweep returns all servers eligible for the global retention sweep:
+// status='ready', enabled=true, and storage_target_id IS NOT NULL.
+// Unlike GetReadyServersForScheduling, this does NOT use FOR UPDATE (no claim needed).
+func (r *ServerRepo) ListEligibleForSweep(ctx context.Context) ([]*domain.Server, error) {
+	const query = `
+		SELECT ` + serverColumns + `
+		FROM servers
+		WHERE enabled = true AND status = 'ready' AND storage_target_id IS NOT NULL
+		ORDER BY id ASC
+	`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("list eligible for sweep: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*domain.Server
+	for rows.Next() {
+		s, err := scanServer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan server: %w", err)
+		}
+		out = append(out, &s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list eligible for sweep rows error: %w", err)
+	}
+	return out, nil
+}
+
 // CountByStatus returns the number of servers in each status, for the
 // dashboard summary. Statuses with zero servers are simply absent from the
 // map rather than present with a zero value.

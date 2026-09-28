@@ -194,3 +194,15 @@ type RetentionDeletion struct {
 	DeletedAt   time.Time
 	Reason      string
 }
+
+type RetentionSweepRequest struct {
+	ID          string
+	Status      string // "pending", "running", "completed", "failed"
+	RequestedAt time.Time
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
+	Summary     map[string]interface{} // {serversProcessed, totalBlobsDeleted, errors: [{serverId, error}]}
+	Error       *string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}

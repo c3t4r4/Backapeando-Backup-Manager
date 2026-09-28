@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"backapeando-backup-manager/internal/crypto"
 	"backapeando-backup-manager/internal/repository"
+	"backapeando-backup-manager/internal/storage"
 )
 
 // Pool defines the interface for enqueuing tasks and checking capacity.
@@ -33,6 +35,7 @@ type Scheduler struct {
 	pool         Pool
 	repos        *repository.Repositories
 	executor     *BackupExecutor
+	sealer       *crypto.Sealer
 	pollInterval time.Duration
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -50,11 +53,12 @@ type Scheduler struct {
 //   - pool: Pool implementation for executing backup tasks
 //   - repos: Repositories for database access
 //   - executor: BackupExecutor for executing backup tasks
+//   - sealer: Crypto sealer for decrypting storage target secrets
 //   - pollInterval: how often to poll for ready servers (e.g., 30s)
 //   - logger: structured logger (can be nil, will be set to noop if needed)
 //
 // Note: Scheduler does not start automatically. Call Start() to begin polling.
-func NewScheduler(pool Pool, repos *repository.Repositories, executor *BackupExecutor, pollInterval time.Duration, logger *slog.Logger) *Scheduler {
+func NewScheduler(pool Pool, repos *repository.Repositories, executor *BackupExecutor, sealer *crypto.Sealer, pollInterval time.Duration, logger *slog.Logger) *Scheduler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -64,6 +68,7 @@ func NewScheduler(pool Pool, repos *repository.Repositories, executor *BackupExe
 		pool:         pool,
 		repos:        repos,
 		executor:     executor,
+		sealer:       sealer,
 		pollInterval: pollInterval,
 		ctx:          ctx,
 		cancel:       cancel,
@@ -147,6 +152,20 @@ func (s *Scheduler) poll() {
 			// In Tarefa 4: claimAndEnqueue will call repo.Servers.GetReadyServersForScheduling
 			// and create backup_runs atomically, then enqueue tasks to the pool.
 			s.claimAndEnqueue(s.ctx, availableSlots)
+
+			// Check for pending global retention sweep requests and execute them asynchronously.
+			// This does not consume a worker pool slot — it's dispatched as a goroutine.
+			if s.repos != nil && s.repos.RetentionSweepRequests != nil {
+				req, err := s.repos.RetentionSweepRequests.ClaimPending(s.ctx)
+				if err != nil {
+					s.logger.ErrorContext(s.ctx, "failed to claim retention sweep request",
+						slog.String("error", err.Error()),
+					)
+				} else if req != nil {
+					s.logger.Info("claiming retention sweep request", "id", req.ID)
+					go s.runGlobalSweep(s.ctx, req.ID)
+				}
+			}
 		}
 	}
 }
@@ -377,4 +396,99 @@ func (s *Scheduler) processQueuedRuns(ctx context.Context, maxRuns int) {
 			slog.String("serverId", queuedRun.ServerID),
 		)
 	}
+}
+
+
+// runGlobalSweep executes a global retention sweep across all eligible servers.
+func (s *Scheduler) runGlobalSweep(ctx context.Context, requestID string) {
+	if err := s.repos.RetentionSweepRequests.MarkRunning(ctx, requestID); err != nil {
+		s.logger.ErrorContext(ctx, "failed to mark retention sweep request running",
+			slog.String("requestId", requestID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	servers, err := s.repos.Servers.ListEligibleForSweep(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "failed to list eligible servers for sweep",
+			slog.String("requestId", requestID),
+			slog.String("error", err.Error()),
+		)
+		if err := s.repos.RetentionSweepRequests.MarkFailed(ctx, requestID, "failed to list eligible servers: "+err.Error()); err != nil {
+			s.logger.ErrorContext(ctx, "failed to mark retention sweep request failed",
+				slog.String("requestId", requestID),
+				slog.String("error", err.Error()),
+			)
+		}
+		return
+	}
+
+	summary := map[string]interface{}{
+		"serversProcessed": 0,
+		"totalBlobsDeleted": 0,
+		"errors":            []map[string]interface{}{},
+	}
+	serverErrors := []map[string]interface{}{}
+	totalDeleted := 0
+
+	for _, server := range servers {
+		target, err := s.repos.StorageTargets.Get(ctx, *server.StorageTargetID)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "failed to get storage target for server",
+				slog.String("serverId", server.ID),
+				slog.String("storageTargetId", *server.StorageTargetID),
+				slog.String("error", err.Error()),
+			)
+			serverErrors = append(serverErrors, map[string]interface{}{
+				"serverId": server.ID,
+				"error":    "failed to get storage target: " + err.Error(),
+			})
+			continue
+		}
+
+		backend, err := storage.NewBackend(target, s.sealer)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "failed to create storage backend",
+				slog.String("serverId", server.ID),
+				slog.String("error", err.Error()),
+			)
+			serverErrors = append(serverErrors, map[string]interface{}{
+				"serverId": server.ID,
+				"error":    "failed to create storage backend: " + err.Error(),
+			})
+			continue
+		}
+
+		if err := s.executor.sweepRetention(ctx, backend, server, ""); err != nil {
+			s.logger.ErrorContext(ctx, "failed to sweep retention for server",
+				slog.String("serverId", server.ID),
+				slog.String("error", err.Error()),
+			)
+			serverErrors = append(serverErrors, map[string]interface{}{
+				"serverId": server.ID,
+				"error":    err.Error(),
+			})
+		} else {
+			summary["serversProcessed"] = summary["serversProcessed"].(int) + 1
+		}
+	}
+
+	summary["totalBlobsDeleted"] = totalDeleted
+	if len(serverErrors) > 0 {
+		summary["errors"] = serverErrors
+	}
+
+	if err := s.repos.RetentionSweepRequests.MarkCompleted(ctx, requestID, summary); err != nil {
+		s.logger.ErrorContext(ctx, "failed to mark retention sweep request completed",
+			slog.String("requestId", requestID),
+			slog.String("error", err.Error()),
+		)
+	}
+
+	s.logger.Info("retention sweep completed",
+		slog.String("requestId", requestID),
+		slog.Int("serversProcessed", summary["serversProcessed"].(int)),
+		slog.Int("totalBlobsDeleted", totalDeleted),
+	)
 }

@@ -11,24 +11,26 @@ import (
 )
 
 type Repositories struct {
-	AdminUsers         *AdminUserRepo
-	AdminSessions      *AdminSessionRepo
-	StorageTargets     *StorageTargetRepo
-	Servers            *ServerRepo
-	RetentionPolicies  *RetentionPolicyRepo
-	BackupRuns         *BackupRunRepo
-	RetentionDeletions *RetentionDeletionRepo
+	AdminUsers              *AdminUserRepo
+	AdminSessions           *AdminSessionRepo
+	StorageTargets          *StorageTargetRepo
+	Servers                 *ServerRepo
+	RetentionPolicies       *RetentionPolicyRepo
+	BackupRuns              *BackupRunRepo
+	RetentionDeletions      *RetentionDeletionRepo
+	RetentionSweepRequests  *RetentionSweepRequestRepo
 }
 
 func New(pool *pgxpool.Pool) *Repositories {
 	return &Repositories{
-		AdminUsers:         &AdminUserRepo{pool: pool},
-		AdminSessions:      &AdminSessionRepo{pool: pool},
-		StorageTargets:     &StorageTargetRepo{pool: pool},
-		Servers:            &ServerRepo{pool: pool},
-		RetentionPolicies:  &RetentionPolicyRepo{pool: pool},
-		BackupRuns:         &BackupRunRepo{pool: pool},
-		RetentionDeletions: &RetentionDeletionRepo{pool: pool},
+		AdminUsers:             &AdminUserRepo{pool: pool},
+		AdminSessions:          &AdminSessionRepo{pool: pool},
+		StorageTargets:         &StorageTargetRepo{pool: pool},
+		Servers:                &ServerRepo{pool: pool},
+		RetentionPolicies:      &RetentionPolicyRepo{pool: pool},
+		BackupRuns:             &BackupRunRepo{pool: pool},
+		RetentionDeletions:     &RetentionDeletionRepo{pool: pool},
+		RetentionSweepRequests: &RetentionSweepRequestRepo{pool: pool},
 	}
 }
 
