@@ -48,8 +48,16 @@ for i in "${!names[@]}"; do
   context="${contexts[$i]}"
 
   echo "Building ${name}..."
+
+  # Pass VERSION build arg to backend (API and worker share the same context)
+  BUILD_ARGS=""
+  if [[ "$name" == "backend" ]]; then
+    BUILD_ARGS="--build-arg VERSION=${NEW_VERSION}"
+  fi
+
   docker build \
     --platform linux/amd64 \
+    $BUILD_ARGS \
     -f "$dockerfile" \
     -t "c3t4r4/backapeando:${name}-${NEW_VERSION}" \
     -t "c3t4r4/backapeando:${name}-latest" \

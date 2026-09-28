@@ -13,7 +13,8 @@ RUN go mod download
 # Copy entire source
 COPY . .
 
-# Compile binary
+# Compile binary (VERSION is accepted for consistency with API build, but not used)
+ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/worker ./cmd/worker
 
 # Runtime stage: minimal Alpine image
