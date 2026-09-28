@@ -428,6 +428,43 @@ export async function deleteStorageTargetBlob(
 }
 
 // ============================================================================
+// Retention Sweep Endpoints (Global Async Purge)
+// ============================================================================
+
+/**
+ * POST /api/retention-sweep
+ * Enqueue a global retention sweep across all eligible servers
+ * Returns 202 Accepted with the request ID
+ */
+export async function postRetentionSweep(): Promise<{ id: string; status: string }> {
+  const { data } = await client.post<{ id: string; status: string }>('/retention-sweep')
+  return data
+}
+
+/**
+ * GET /api/retention-sweep/latest
+ * Get the latest retention sweep request (for polling the status)
+ */
+export async function getLatestRetentionSweep(): Promise<{
+  id?: string
+  status: string
+  summary?: Record<string, unknown>
+  error?: string
+  startedAt?: string
+  finishedAt?: string
+}> {
+  const { data } = await client.get<{
+    id?: string
+    status: string
+    summary?: Record<string, unknown>
+    error?: string
+    startedAt?: string
+    finishedAt?: string
+  }>('/retention-sweep/latest')
+  return data
+}
+
+// ============================================================================
 // Admin User Endpoints
 // ============================================================================
 
