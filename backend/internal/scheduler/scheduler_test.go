@@ -49,7 +49,7 @@ func TestSchedulerStart(t *testing.T) {
 	))
 
 	mock := &MockWorkerPool{availableSlots: 5}
-	sched := NewScheduler(mock, nil, nil, 50*time.Millisecond, logger)
+	sched := NewScheduler(mock, nil, nil, nil, 50*time.Millisecond, logger)
 
 	// Start should not block and should begin polling.
 	sched.Start()
@@ -76,7 +76,7 @@ func TestSchedulerStopWithoutStart(t *testing.T) {
 	))
 
 	mock := &MockWorkerPool{availableSlots: 5}
-	sched := NewScheduler(mock, nil, nil, 50*time.Millisecond, logger)
+	sched := NewScheduler(mock, nil, nil, nil, 50*time.Millisecond, logger)
 
 	// Stop without Start should not panic or hang.
 	err := sched.Stop(context.Background())
@@ -94,7 +94,7 @@ func TestSchedulerRespectsConcurrency(t *testing.T) {
 	))
 
 	mock := &MockWorkerPool{availableSlots: 0}
-	sched := NewScheduler(mock, nil, nil, 10*time.Millisecond, logger)
+	sched := NewScheduler(mock, nil, nil, nil, 10*time.Millisecond, logger)
 
 	sched.Start()
 
@@ -122,7 +122,7 @@ func TestSchedulerContextCancellation(t *testing.T) {
 	))
 
 	mock := &MockWorkerPool{availableSlots: 5}
-	sched := NewScheduler(mock, nil, nil, 100*time.Millisecond, logger)
+	sched := NewScheduler(mock, nil, nil, nil, 100*time.Millisecond, logger)
 
 	sched.Start()
 
@@ -136,7 +136,7 @@ func TestSchedulerContextCancellation(t *testing.T) {
 	}
 
 	// Verify we can start again after stopping.
-	sched2 := NewScheduler(mock, nil, nil, 100*time.Millisecond, logger)
+	sched2 := NewScheduler(mock, nil, nil, nil, 100*time.Millisecond, logger)
 	sched2.Start()
 	time.Sleep(10 * time.Millisecond)
 	err = sched2.Stop(context.Background())
@@ -156,7 +156,7 @@ func TestSchedulerPollInterval(t *testing.T) {
 	// Use availableSlots = 0 to skip claimAndEnqueue and avoid nil repos panic
 	// The scheduler's polling loop will still run and check pool capacity
 	mockPool := &MockWorkerPool{availableSlots: 0}
-	sched := NewScheduler(mockPool, nil, nil, 20*time.Millisecond, logger)
+	sched := NewScheduler(mockPool, nil, nil, nil, 20*time.Millisecond, logger)
 
 	sched.Start()
 
@@ -177,7 +177,7 @@ func TestSchedulerNewWithNilLogger(t *testing.T) {
 	mock := &MockWorkerPool{availableSlots: 5}
 
 	// nil logger should be replaced with default
-	sched := NewScheduler(mock, nil, nil, 50*time.Millisecond, nil)
+	sched := NewScheduler(mock, nil, nil, nil, 50*time.Millisecond, nil)
 	if sched.logger == nil {
 		t.Fatal("Scheduler.logger should not be nil after NewScheduler with nil logger")
 	}
@@ -207,7 +207,7 @@ func TestSchedulerMultipleStopCalls(t *testing.T) {
 	))
 
 	mock := &MockWorkerPool{availableSlots: 5}
-	sched := NewScheduler(mock, nil, nil, 50*time.Millisecond, logger)
+	sched := NewScheduler(mock, nil, nil, nil, 50*time.Millisecond, logger)
 
 	sched.Start()
 	time.Sleep(10 * time.Millisecond)

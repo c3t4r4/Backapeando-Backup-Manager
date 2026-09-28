@@ -62,7 +62,7 @@ services:
 
   # Backend API (replicated)
   api:
-    image: backapeando-api:latest # Pre-built image or built locally with build context
+    image: c3t4r4/backapeando:backend-latest # Pre-built image or built locally with build context
     environment:
       TZ: America/Sao_Paulo
       DATABASE_URL_FILE: /run/secrets/database_url
@@ -121,7 +121,7 @@ services:
   # No HTTP port, no Traefik labels — this service only talks to Postgres,
   # target SSH servers, and Azure Blob Storage.
   worker:
-    image: backapeando-worker:latest # Pre-built image or built locally with build context
+    image: c3t4r4/backapeando:worker-latest # Pre-built image or built locally with build context
     environment:
       TZ: America/Sao_Paulo
       DATABASE_URL_FILE: /run/secrets/database_url
@@ -155,7 +155,7 @@ services:
 
   # Frontend (replicated)
   web:
-    image: backapeando-web:latest # Pre-built image
+    image: c3t4r4/backapeando:frontend-latest # Pre-built image
     networks:
       - backapeando_ingress
     deploy:

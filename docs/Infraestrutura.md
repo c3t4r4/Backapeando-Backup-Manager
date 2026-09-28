@@ -213,6 +213,17 @@ Docker Swarm **não suporta** a sintaxe longa de `depends_on` com `condition:` (
    docker stack deploy -c docker-stack.yml backapeando
    ```
 
+   **Importante — tags `latest` não redeployam sozinhas:** `docker-stack.yml` referencia as imagens por tag fixa `-latest` (`c3t4r4/backapeando:backend-latest`, etc.). `build-images.sh` builda e publica uma imagem nova no Docker Hub sob essa mesma tag, mas **não** dispara nenhum `docker stack deploy` automaticamente — é sempre um passo manual separado. Além disso, se o texto do serviço em `docker-stack.yml` não mudar entre uma execução e outra (a string da imagem continua literalmente `backend-latest`), o Swarm pode não perceber que o conteúdo por trás da tag mudou e não força o repull/redeploy do serviço já em execução — o binário antigo continua rodando silenciosamente (incidente real: 2026-09-28, rota `POST /api/retention-sweep` retornando 404 e `version` do `/api/health` ausente por dias após o build, porque o `docker stack deploy` não tinha sido reexecutado desde então). Depois de todo `build-images.sh`, reexecutar sempre:
+   ```bash
+   docker stack deploy -c docker-stack.yml backapeando
+   ```
+   e, se os sintomas persistirem (nova rota 404, versão desatualizada), forçar cada serviço individualmente:
+   ```bash
+   docker service update --force --with-registry-auth backapeando_api
+   docker service update --force --with-registry-auth backapeando_worker
+   docker service update --force --with-registry-auth backapeando_web
+   ```
+
 3. Monitorar logs inicial de crash-loop esperado:
    - `api` e `worker` podem fazer crash-loop por ~10-50s enquanto Postgres/Redis inicializam
    - `web` sobe normalmente mas requests falham com 5xx até `api` estar healthy
@@ -295,3 +306,4 @@ Não coberto neste repositório para produção — o serviço já está declara
 | 2026-09-17 | `scheduler.NextRunTime` agora interpreta cron em America/Sao_Paulo fixo (via `time.LoadLocation`, não só env var); `import _ "time/tzdata"` embutido em `cmd/worker/main.go` e `cmd/api/main.go`; `ENV TZ=America/Sao_Paulo` adicionado a todos os containers em `docker-compose.yml` (dev) e `docker-compose.prod.yml` (prod); Dockerfiles recebem comentário documentando fix | dev, prod | Corrigir cron `0 3 * * *` disparando às 00:00 (UTC) em vez de 03:00 (Brasil) — causa raiz: `time.Now()` sem fuso explícito no code + container sem `TZ` nem acesso a banco IANA | `.claude/plans/Backapeando-2026-09-17-cron-timezone-america-sao-paulo.md` |
 | 2026-09-17 | Novo script `build-images.sh` (raiz) para build e push de 3 imagens (`backend`, `worker`, `frontend`) para Docker Hub (`c3t4r4/backapeando:*`) com versionamento automático (incrementa patch de `prod-version` e commita ao fim, somente se tudo tiver sucesso) | ci/cd | Script de deploy/build para produção — substitui o processo manual de build/push das imagens | `.claude/plans/use-o-script-build-images-sh-wiggly-quokka.md` |
 | 2026-09-17 | `build-images.sh` passa a builda as 3 imagens com `--platform linux/amd64` explícito no `docker build` | ci/cd | Servidor de produção roda `linux/amd64`; sem o flag, a imagem herdava a arquitetura nativa do host local (risco de imagem arm64 incompatível ao buildar em Mac Apple Silicon) | `.claude/plans/backapeando-2026-09-17-build-images-amd64.md` |
+| 2026-09-28 | `docker-compose.prod.yml` corrigido: nomes de imagem (`backapeando-api:latest`, `backapeando-worker:latest`, `backapeando-web:latest`) não batiam com o que `build-images.sh` realmente publica — agora usa `c3t4r4/backapeando:backend-latest`/`worker-latest`/`frontend-latest`, igual a `docker-stack.yml`. Nota operacional adicionada ao procedimento de deploy sobre tags `latest` não redeployando sozinhas no Swarm (ver seção "Procedimento" acima) | prod | Diagnóstico de 3 sintomas em produção (expurgo 404, versão indisponível, blobs vazios) — causa raiz era binário desatualizado, Swarm nunca repuxou a imagem `-latest` mais recente após `build-images.sh` | `.claude/plans/preciso-verificar-que-quando-abstract-flask.md` |

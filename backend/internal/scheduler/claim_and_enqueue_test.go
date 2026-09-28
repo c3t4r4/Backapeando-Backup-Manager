@@ -91,7 +91,7 @@ func TestClaimAndEnqueueProcessesQueuedRunsEvenWithNoCronEligibleServers(t *test
 	))
 	mockPool := &MockWorkerPool{availableSlots: 3}
 	executor := NewBackupExecutor(dbPool, repos, nil, logger)
-	sched := NewScheduler(mockPool, repos, executor, time.Minute, logger)
+	sched := NewScheduler(mockPool, repos, executor, nil, time.Minute, logger)
 
 	sched.claimAndEnqueue(ctx, 3)
 
