@@ -325,3 +325,52 @@ func (h *StorageTargetHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (h *StorageTargetHandlers) ListBlobs(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	target, err := h.Targets.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "storage target not found")
+		return
+	}
+
+	backend, err := storage.NewBackend(target, h.Sealer)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize storage backend")
+		return
+	}
+
+	blobs, err := backend.ListBlobs(r.Context(), "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list blobs")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"blobs": blobs,
+	})
+}
+
+func (h *StorageTargetHandlers) DeleteBlob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	blobName := r.PathValue("blobName")
+
+	target, err := h.Targets.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "storage target not found")
+		return
+	}
+
+	backend, err := storage.NewBackend(target, h.Sealer)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize storage backend")
+		return
+	}
+
+	if err := backend.DeleteBlob(r.Context(), blobName); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete blob")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

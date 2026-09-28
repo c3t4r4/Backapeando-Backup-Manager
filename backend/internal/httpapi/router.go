@@ -91,6 +91,8 @@ func NewRouter(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/storage-targets/{id}", storageTargetHandlers.Get)
 	mux.HandleFunc("PUT /api/storage-targets/{id}", storageTargetHandlers.Update)
 	mux.HandleFunc("DELETE /api/storage-targets/{id}", storageTargetHandlers.Delete)
+	mux.HandleFunc("GET /api/storage-targets/{id}/blobs", storageTargetHandlers.ListBlobs)
+	mux.HandleFunc("DELETE /api/storage-targets/{id}/blobs/{blobName...}", storageTargetHandlers.DeleteBlob)
 
 	mux.HandleFunc("GET /api/retention-policy/default", retentionHandlers.GetGlobal)
 	mux.HandleFunc("PUT /api/retention-policy/default", retentionHandlers.UpdateGlobal)

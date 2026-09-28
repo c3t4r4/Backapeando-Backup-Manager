@@ -271,6 +271,15 @@
         </button>
         <button
           type="button"
+          @click="showBlobsDialog = true"
+          :disabled="saving"
+          class="px-6 py-2 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+          data-testid="view-blobs-button"
+        >
+          Ver blobs
+        </button>
+        <button
+          type="button"
           @click="handleCancel"
           :disabled="saving"
           class="px-6 py-2 bg-gray-200 text-gray-800 font-medium rounded-lg hover:bg-gray-300 transition-colors"
@@ -280,6 +289,12 @@
         </button>
       </div>
     </form>
+
+    <StorageTargetBlobsDialog
+      :storage-target-id="targetId"
+      :is-open="showBlobsDialog"
+      @close="showBlobsDialog = false"
+    />
   </div>
 </template>
 
@@ -289,6 +304,7 @@ import { useRoute, useRouter } from 'vue-router'
 import * as api from '@/api'
 import type { StorageTargetType, UpsertStorageTargetRequest } from '@/api'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
+import StorageTargetBlobsDialog from '@/components/StorageTargetBlobsDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -318,6 +334,7 @@ const initialLoading = ref(true)
 const loaded = ref(false)
 const saving = ref(false)
 const error = ref<string | null>(null)
+const showBlobsDialog = ref(false)
 
 onMounted(async () => {
   try {

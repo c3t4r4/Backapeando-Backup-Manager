@@ -403,6 +403,30 @@ export async function deleteStorageTarget(id: string): Promise<void> {
   await client.delete(`/storage-targets/${id}`)
 }
 
+/**
+ * GET /api/storage-targets/{id}/blobs
+ * List all blobs in a storage target
+ */
+export async function getStorageTargetBlobs(
+  id: string
+): Promise<{ blobs: Array<{ name: string; lastModified: string; sizeBytes: number }> }> {
+  const { data } = await client.get<{
+    blobs: Array<{ name: string; lastModified: string; sizeBytes: number }>
+  }>(`/storage-targets/${id}/blobs`)
+  return data
+}
+
+/**
+ * DELETE /api/storage-targets/{id}/blobs/{blobName}
+ * Delete a blob from a storage target
+ */
+export async function deleteStorageTargetBlob(
+  id: string,
+  blobName: string
+): Promise<void> {
+  await client.delete(`/storage-targets/${id}/blobs/${encodeURIComponent(blobName)}`)
+}
+
 // ============================================================================
 // Admin User Endpoints
 // ============================================================================
