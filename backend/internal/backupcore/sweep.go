@@ -93,9 +93,14 @@ func SweepRetention(
 	}
 
 	affected, err := retention.Sweep(ctx, retentionBlobs, policy, time.Now(), dryRun, del)
+
+	// Even if sweep has errors, return the result with successful deletions
+	// already recorded in affected. Callers can inspect the error separately
+	// to learn which blobs failed to delete.
+	result := &SweepResult{DryRun: dryRun, Affected: affected}
 	if err != nil {
-		return nil, fmt.Errorf("sweep: %w", err)
+		return result, fmt.Errorf("sweep: %w", err)
 	}
 
-	return &SweepResult{DryRun: dryRun, Affected: affected}, nil
+	return result, nil
 }

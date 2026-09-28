@@ -54,4 +54,11 @@ type Backend interface {
 	// recorded (or be about to record) an audit row before/alongside calling
 	// this (see internal/backupcore).
 	DeleteBlob(ctx context.Context, blobName string) error
+
+	// ProbeDelete tests that the target has permission to delete blobs by
+	// uploading a temporary marker blob and deleting it immediately.
+	// Used during "test connection" to catch permission/credential issues
+	// (e.g., a SAS token without delete permission) before they silently
+	// break retention sweeps in production.
+	ProbeDelete(ctx context.Context) error
 }

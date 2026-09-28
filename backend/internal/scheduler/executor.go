@@ -296,14 +296,16 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 		slog.Int("uploadDurationMs", uploadDurationMS),
 	)
 
-	// Run retention sweep post-backup (non-fatal on error)
+	// Run retention sweep post-backup. Sweep failures do not fail the backup
+	// (retention cleanup is post-hoc and the backup itself succeeded), but the
+	// error is logged at ERROR level because it indicates an operator-facing
+	// problem: storage credential lacks delete permission, or a blob is stuck.
 	if err := e.sweepRetention(ctx, backend, server, backupRun.ID); err != nil {
-		e.logger.ErrorContext(ctx, "retention sweep failed (non-fatal)",
+		e.logger.ErrorContext(ctx, "retention sweep encountered errors; some blobs may not have been deleted",
 			slog.String("serverId", server.ID),
 			slog.String("backupRunId", backupRun.ID),
 			slog.String("error", err.Error()),
 		)
-		// Don't fail the backup — retention failure is post-hoc cleanup
 	}
 
 	e.logger.InfoContext(ctx, "backup completed successfully",

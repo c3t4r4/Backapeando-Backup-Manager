@@ -46,6 +46,10 @@ func (a *azureAdapter) DeleteBlob(ctx context.Context, blobName string) error {
 	return azureblob.DeleteBlob(ctx, a.target, blobName)
 }
 
+func (a *azureAdapter) ProbeDelete(ctx context.Context) error {
+	return azureblob.ProbeDelete(ctx, a.target)
+}
+
 // convertBlobInfo adapts any []T with the same (Name, LastModified,
 // SizeBytes) shape as BlobInfo. Go generics can't express "structurally
 // identical struct" directly, so each concrete package's own BlobInfo slice
@@ -88,6 +92,10 @@ func (a *s3Adapter) DeleteBlob(ctx context.Context, blobName string) error {
 	return a.backend.DeleteBlob(ctx, blobName)
 }
 
+func (a *s3Adapter) ProbeDelete(ctx context.Context) error {
+	return a.backend.ProbeDelete(ctx)
+}
+
 // fsAdapter satisfies Backend by delegating to an *fsstorage.Backend,
 // converting fsstorage.BlobInfo to BlobInfo.
 type fsAdapter struct {
@@ -116,4 +124,8 @@ func (a *fsAdapter) CheckAccess(ctx context.Context) error {
 
 func (a *fsAdapter) DeleteBlob(ctx context.Context, blobName string) error {
 	return a.backend.DeleteBlob(ctx, blobName)
+}
+
+func (a *fsAdapter) ProbeDelete(ctx context.Context) error {
+	return a.backend.ProbeDelete(ctx)
 }

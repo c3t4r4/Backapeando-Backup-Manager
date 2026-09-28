@@ -268,6 +268,16 @@ func (h *ServerHandlers) checkStorageTarget(ctx context.Context, serverID, stora
 		}
 		return &checkResult{OK: false, Error: "storage connection failed"}
 	}
+
+	if err := backend.ProbeDelete(ctx); err != nil {
+		if h.Logger != nil {
+			h.Logger.ErrorContext(ctx, "storage target delete probe failed",
+				slog.String("serverId", serverID), slog.String("storageTargetId", storageTargetID), slog.String("error", err.Error()),
+			)
+		}
+		return &checkResult{OK: false, Error: "storage delete permission missing or failed"}
+	}
+
 	return &checkResult{OK: true}
 }
 

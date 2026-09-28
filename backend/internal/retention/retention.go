@@ -9,6 +9,7 @@ package retention
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 )
@@ -54,6 +55,8 @@ func Decide(blobs []BlobInfo, p Policy, now time.Time) map[string]bool {
 	for i, b := range sorted {
 		if i < p.RecentCount {
 			keep[b.Name] = true
+			monthKey := b.LastModified.UTC().Format("2006-01")
+			monthsSeen[monthKey] = true
 			continue
 		}
 		if p.MonthlyCount <= 0 {
@@ -80,15 +83,17 @@ type DeleteFunc func(ctx context.Context, blobName string) error
 // that Decide() did not keep. It returns the list of blob names that were
 // (dryRun=false) or would be (dryRun=true) deleted, in no particular order.
 //
-// If del returns an error partway through, Sweep stops immediately and
-// returns the error together with the list of blobs successfully deleted so
-// far — the caller (the backup-now handler) is responsible for recording an
-// audit entry (retention_deletions) for each name in that partial list
-// before surfacing the error, so the audit trail never silently loses a
-// real deletion.
+// If del returns errors during deletion, Sweep continues processing all blobs
+// and aggregates the errors into a single error via errors.Join. The caller
+// can use errors.Is to check for individual error types, and should inspect
+// the returned affected list (which contains successful deletions) separately
+// from the aggregated error. This allows partial cleanup to proceed even if
+// some blobs fail to delete (e.g., a single permission-denied blob does not
+// prevent cleanup of other blobs in the same run).
 func Sweep(ctx context.Context, blobs []BlobInfo, p Policy, now time.Time, dryRun bool, del DeleteFunc) ([]string, error) {
 	keep := Decide(blobs, p, now)
 	var affected []string
+	var deleteErrs []error
 	for _, b := range blobs {
 		if keep[b.Name] {
 			continue
@@ -98,9 +103,13 @@ func Sweep(ctx context.Context, blobs []BlobInfo, p Policy, now time.Time, dryRu
 			continue
 		}
 		if err := del(ctx, b.Name); err != nil {
-			return affected, err
+			deleteErrs = append(deleteErrs, err)
+			continue
 		}
 		affected = append(affected, b.Name)
+	}
+	if len(deleteErrs) > 0 {
+		return affected, errors.Join(deleteErrs...)
 	}
 	return affected, nil
 }

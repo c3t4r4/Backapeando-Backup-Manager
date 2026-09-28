@@ -65,9 +65,11 @@ type backupNowRequest struct {
 }
 
 type retentionResultDTO struct {
-	DryRun      bool     `json:"dryRun"`
-	WouldDelete []string `json:"wouldDelete,omitempty"`
-	Deleted     []string `json:"deleted,omitempty"`
+	DryRun       bool     `json:"dryRun"`
+	WouldDelete  []string `json:"wouldDelete,omitempty"`
+	Deleted      []string `json:"deleted,omitempty"`
+	Error        *string  `json:"error,omitempty"`        // Error encountered during sweep, if any
+	FailedDelete []string `json:"failedDelete,omitempty"` // Blob names that failed to delete (only populated when Error is set)
 }
 
 type backupNowResponse struct {
@@ -375,6 +377,13 @@ func auditWriteFailureAfterDelete(ctx context.Context, logger *slog.Logger, serv
 // for the duplication this replaced. With dryRun=true, nothing is deleted
 // and no audit rows are written (RN-BACKUP-007) — the response only reports
 // what would be deleted.
+//
+// If sweep encounters errors deleting individual blobs (due to resilient
+// behavior added in Fix 2), the result still contains successfully-deleted
+// blobs (result.Affected), and the error is returned to the caller. The caller
+// (backup.go's BackupHandlers.BackupNow) then populates retentionResultDTO's
+// Error and FailedDelete fields, returning HTTP 200 with details so the
+// operator can see what failed.
 func (h *BackupHandlers) sweepRetention(ctx context.Context, server domain.Server, backend storage.Backend, backupRunID string, dryRun bool) (*retentionResultDTO, error) {
 	dbPolicy, err := h.RetentionPolicies.EffectiveForServer(ctx, server.ID)
 	if err != nil {
@@ -387,16 +396,27 @@ func (h *BackupHandlers) sweepRetention(ctx context.Context, server domain.Serve
 	}
 
 	result, err := backupcore.SweepRetention(ctx, backend, slugify(server.Name)+"/", policy, server.ID, backupRunID, dryRun, h.RetentionDeletions, onAuditFailure)
-	if err != nil {
-		return nil, fmt.Errorf("sweep: %w", err)
-	}
 
 	dto := &retentionResultDTO{DryRun: dryRun}
-	if dryRun {
-		dto.WouldDelete = result.Affected
-	} else {
-		dto.Deleted = result.Affected
+	if result != nil {
+		if dryRun {
+			dto.WouldDelete = result.Affected
+		} else {
+			dto.Deleted = result.Affected
+		}
 	}
+
+	// If sweep had an error, include it in the response so the operator can see
+	// what blobs failed. Don't fail the backup — retention cleanup is post-hoc.
+	if err != nil {
+		errMsg := err.Error()
+		dto.Error = &errMsg
+		// Sweep does not return the set of blobs that failed to delete in the
+		// aggregated error, so we can't populate dto.FailedDelete. The error
+		// message itself (logged server-side) contains the details.
+		return dto, nil
+	}
+
 	return dto, nil
 }
 

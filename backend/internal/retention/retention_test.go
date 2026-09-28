@@ -168,6 +168,42 @@ func TestDecide_MonthlyCountZero(t *testing.T) {
 	}
 }
 
+// TestDecide_RecentCountOverlapsMonth covers a bug where multiple blobs in
+// the same month, when that month contains RecentCount blobs, causes one extra
+// blob to be kept as a "monthly representative" even though the month is
+// already fully covered by RecentCount. Fix: mark monthsSeen when keeping blobs
+// via RecentCount, so the (RecentCount+1)th blob in that month is not kept.
+func TestDecide_RecentCountOverlapsMonth(t *testing.T) {
+	now := mustParse(t, "2026-09-14T12:00:00Z")
+	policy := Policy{RecentCount: 3, MonthlyCount: 12}
+
+	// All 4 blobs are in September (current month).
+	// With RecentCount=3, only the 3 most recent should be kept.
+	// The 4th blob (sept-4) is not recent AND should not be kept
+	// as the "September representative" because September is already
+	// covered by the 3 recent blobs.
+	blobs := []BlobInfo{
+		{Name: "sept-1", LastModified: mustParse(t, "2026-09-14T00:00:00Z")},
+		{Name: "sept-2", LastModified: mustParse(t, "2026-09-13T00:00:00Z")},
+		{Name: "sept-3", LastModified: mustParse(t, "2026-09-12T00:00:00Z")},
+		{Name: "sept-4", LastModified: mustParse(t, "2026-09-11T00:00:00Z")},
+	}
+
+	keep := Decide(blobs, policy, now)
+
+	for _, name := range []string{"sept-1", "sept-2", "sept-3"} {
+		if !keep[name] {
+			t.Errorf("expected %q to be kept (within RecentCount)", name)
+		}
+	}
+	if keep["sept-4"] {
+		t.Errorf("expected sept-4 to NOT be kept (beyond RecentCount, and month already covered by recent blobs)")
+	}
+	if len(keep) != 3 {
+		t.Errorf("expected exactly 3 kept blobs, got %d: %v", len(keep), keptNames(keep))
+	}
+}
+
 // fakeDelete records calls and can be configured to fail after N successful
 // calls, to exercise Sweep's stop-on-error behavior.
 type fakeDelete struct {
@@ -242,7 +278,12 @@ func TestSweep_RealRunDeletesEachNotKept(t *testing.T) {
 	}
 }
 
-func TestSweep_StopsOnDeleteError(t *testing.T) {
+// TestSweep_ContinuesOnPartialDeleteErrors covers the resilient behavior of
+// Sweep: if some blobs fail to delete, Sweep continues processing the rest
+// and returns the list of successful deletions along with an aggregated error.
+// This allows partial cleanup to proceed even if a single blob (e.g., one with
+// a permission-denied error) is blocking, rather than stalling the entire run.
+func TestSweep_ContinuesOnPartialDeleteErrors(t *testing.T) {
 	now := mustParse(t, "2026-09-14T12:00:00Z")
 	policy := Policy{RecentCount: 0, MonthlyCount: 0}
 	blobs := []BlobInfo{
@@ -255,16 +296,33 @@ func TestSweep_StopsOnDeleteError(t *testing.T) {
 	fd := &fakeDelete{failAt: 1, callErr: wantErr} // fails on the 2nd delete call
 
 	affected, err := Sweep(context.Background(), blobs, policy, now, false, fd.delete)
+
+	// Sweep should continue and attempt all 3 deletes.
+	if len(fd.calls) != 3 {
+		t.Fatalf("expected Sweep to attempt all 3 DeleteFunc calls, got %d: %v", len(fd.calls), fd.calls)
+	}
+
+	// Affected list should contain the 2 successful deletions (a and c),
+	// but NOT b (which failed).
+	if len(affected) != 2 {
+		t.Fatalf("expected 2 successful deletions, got %d: %v", len(affected), affected)
+	}
+	successMap := make(map[string]bool)
+	for _, name := range affected {
+		successMap[name] = true
+	}
+	if !successMap["a"] || !successMap["c"] {
+		t.Errorf("expected successful deletions for 'a' and 'c', got: %v", affected)
+	}
+	if successMap["b"] {
+		t.Errorf("blob 'b' should not be in affected list (deletion failed)")
+	}
+
+	// Error should be present and contain the wantErr.
+	if err == nil {
+		t.Fatalf("expected Sweep to return an error, got nil")
+	}
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("expected Sweep to return the delete error, got: %v", err)
-	}
-	// Only the first successful deletion should be reflected in affected;
-	// Sweep must stop immediately after the failing call, not continue to
-	// the remaining blobs.
-	if len(affected) != 1 {
-		t.Fatalf("expected exactly 1 affected blob before the error, got %d: %v", len(affected), affected)
-	}
-	if len(fd.calls) != 2 {
-		t.Fatalf("expected exactly 2 DeleteFunc calls (1 success + 1 failure), got %d: %v", len(fd.calls), fd.calls)
+		t.Fatalf("expected error to contain the delete failure, got: %v", err)
 	}
 }

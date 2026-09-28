@@ -155,18 +155,23 @@ func (b *Backend) ListBlobs(ctx context.Context, prefix string) ([]BlobInfo, err
 }
 
 // CheckAccess verifies RootPath exists (creating it if missing) and is
-// writable, by writing and removing a small marker file.
+// readable, writable, and deletable.
 func (b *Backend) CheckAccess(ctx context.Context) error {
 	if err := os.MkdirAll(b.root, 0o700); err != nil {
 		return fmt.Errorf("fsstorage: root path not usable: %w", err)
 	}
+	return b.ProbeDelete(ctx)
+}
 
-	marker := filepath.Join(b.root, fmt.Sprintf(".fsstorage-check-%d", time.Now().UnixNano()))
+// ProbeDelete tests write and delete permissions by creating and removing
+// a small marker file.
+func (b *Backend) ProbeDelete(ctx context.Context) error {
+	marker := filepath.Join(b.root, fmt.Sprintf(".fsstorage-probe-%d", time.Now().UnixNano()))
 	if err := os.WriteFile(marker, []byte("ok"), 0o600); err != nil {
 		return fmt.Errorf("fsstorage: root path not writable: %w", err)
 	}
 	if err := os.Remove(marker); err != nil {
-		return fmt.Errorf("fsstorage: failed to clean up access-check marker file: %w", err)
+		return fmt.Errorf("fsstorage: probe delete failed: %w", err)
 	}
 	return nil
 }

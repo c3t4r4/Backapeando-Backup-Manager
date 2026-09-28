@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
@@ -156,6 +157,27 @@ func DeleteBlob(ctx context.Context, t Target, blobName string) error {
 	if _, err := client.DeleteBlob(ctx, t.ContainerName, blobName, nil); err != nil {
 		return fmt.Errorf("DeleteBlob: %w", err)
 	}
+	return nil
+}
+
+// ProbeDelete tests delete permission by uploading a temporary blob and
+// deleting it immediately. Returns any error encountered during upload or
+// delete, which indicates a permission/connectivity problem.
+func ProbeDelete(ctx context.Context, t Target) error {
+	client, err := newClient(t)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	probeName := fmt.Sprintf(".probe-delete-%d", time.Now().UnixNano())
+	if _, err := client.UploadStream(ctx, t.ContainerName, probeName, strings.NewReader(""), nil); err != nil {
+		return fmt.Errorf("probe upload: %w", err)
+	}
+
+	if _, err := client.DeleteBlob(ctx, t.ContainerName, probeName, nil); err != nil {
+		return fmt.Errorf("probe delete: %w", err)
+	}
+
 	return nil
 }
 

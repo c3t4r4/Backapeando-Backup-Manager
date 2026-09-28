@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -188,5 +189,28 @@ func (b *Backend) DeleteBlob(ctx context.Context, blobName string) error {
 	if err != nil {
 		return fmt.Errorf("s3storage: delete object: %w", err)
 	}
+	return nil
+}
+
+// ProbeDelete tests delete permission by uploading a temporary object and
+// deleting it immediately. Returns any error encountered during upload or
+// delete, which indicates a permission/connectivity problem.
+func (b *Backend) ProbeDelete(ctx context.Context) error {
+	probeName := fmt.Sprintf(".probe-delete-%d", time.Now().UnixNano())
+	if _, err := b.uploader.Upload(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(b.bucket),
+		Key:    aws.String(probeName),
+		Body:   strings.NewReader(""),
+	}); err != nil {
+		return fmt.Errorf("s3storage: probe upload: %w", err)
+	}
+
+	if _, err := b.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(b.bucket),
+		Key:    aws.String(probeName),
+	}); err != nil {
+		return fmt.Errorf("s3storage: probe delete: %w", err)
+	}
+
 	return nil
 }
