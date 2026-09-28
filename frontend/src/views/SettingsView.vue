@@ -229,12 +229,11 @@ async function triggerSweep(): Promise<void> {
     // Start polling
     pollSweepStatus()
   } catch (err) {
-    if (import.meta.env.DEV) {
-      console.error('[DEBUG] API Error:', err)
-    }
+    const errorMsg = err instanceof Error ? err.message : 'erro desconhecido'
+    console.error('[DEBUG] API Error triggering sweep:', err)
     sweepStatus.value = {
       status: 'failed',
-      error: 'Erro ao iniciar expurgo. Tente novamente.',
+      error: `Erro ao iniciar expurgo: ${errorMsg}`,
     }
   } finally {
     sweepLoading.value = false

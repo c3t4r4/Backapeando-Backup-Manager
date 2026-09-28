@@ -437,7 +437,7 @@ export async function deleteStorageTargetBlob(
  * Returns 202 Accepted with the request ID
  */
 export async function postRetentionSweep(): Promise<{ id: string; status: string }> {
-  const { data } = await client.post<{ id: string; status: string }>('/retention-sweep')
+  const { data } = await client.post<{ id: string; status: string }>('/retention-sweep', {})
   return data
 }
 

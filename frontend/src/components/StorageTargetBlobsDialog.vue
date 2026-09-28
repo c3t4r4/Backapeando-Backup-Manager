@@ -8,7 +8,12 @@
         </DialogDescription>
       </DialogHeader>
 
-      <div v-if="loading" class="flex justify-center items-center py-8">
+      <div v-if="error" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+        <p class="font-bold">Erro</p>
+        <p class="text-sm">{{ error }}</p>
+      </div>
+
+      <div v-else-if="loading" class="flex justify-center items-center py-8">
         <div class="text-gray-500">Carregando blobs...</div>
       </div>
 
@@ -75,7 +80,7 @@ interface BlobInfo {
   sizeBytes: number
 }
 
-defineProps<{
+const props = defineProps<{
   storageTargetId: string
   isOpen: boolean
 }>()
@@ -87,14 +92,17 @@ const emit = defineEmits<{
 const blobs = ref<BlobInfo[]>([])
 const loading = ref(false)
 const deleting = ref<string | null>(null)
+const error = ref<string | null>(null)
 
 async function loadBlobs(): Promise<void> {
   loading.value = true
+  error.value = null
   try {
-    const result = await getStorageTargetBlobs(storageTargetId)
+    const result = await getStorageTargetBlobs(props.storageTargetId)
     blobs.value = result.blobs
-  } catch {
-    // silently fail — error handling is minimal per spec
+  } catch (err) {
+    error.value = `Erro ao carregar blobs: ${err instanceof Error ? err.message : 'erro desconhecido'}`
+    console.error('Failed to load blobs:', err)
   } finally {
     loading.value = false
   }
@@ -107,10 +115,11 @@ async function deleteBlob(blobName: string): Promise<void> {
 
   deleting.value = blobName
   try {
-    await deleteStorageTargetBlob(storageTargetId, blobName)
+    await deleteStorageTargetBlob(props.storageTargetId, blobName)
     blobs.value = blobs.value.filter((b) => b.name !== blobName)
-  } catch {
-    // silently fail
+  } catch (err) {
+    error.value = `Erro ao deletar blob: ${err instanceof Error ? err.message : 'erro desconhecido'}`
+    console.error('Failed to delete blob:', err)
   } finally {
     deleting.value = null
   }
@@ -129,9 +138,4 @@ function handleOpenChange(open: boolean): void {
     emit('close')
   }
 }
-
-defineExpose({
-  storageTargetId,
-  isOpen,
-})
 </script>
