@@ -152,6 +152,17 @@ Antes, `error_message` era sempre uma frase genérica fixa por etapa (ex.: "back
 
 Nenhuma mudança de schema JSON (os dois campos já existiam no DTO) — apenas o conteúdo passou a ser útil.
 
+### `POST /api/servers/{id}/backup-now` — resposta ganha campos de erro de sweep (2026-09-28)
+
+Campos novos na resposta JSON `backupNowResponse.Retention` (`retentionResultDTO`):
+
+| Campo | Tipo | Observação |
+| --- | --- | --- |
+| `error` | `string?` | Mensagem de erro agregado se a varredura de retenção encontrou erros ao deletar blobs (ex.: credencial sem permissão de delete). Null se sem erro. |
+| `failedDelete` | `string[]?` | Lista de nomes de blobs que falharam ao ser deletados (não preenchido na versão atual; presente para extensibilidade futura quando `Sweep` passar a retornar nomes específicos de falhas). |
+
+**Comportamento:** Antes, se o sweep tivesse qualquer erro de delete, a resposta omitia `Retention` inteiramente (`null`). Agora, a resposta HTTP é sempre **200 OK** mesmo com erros de sweep (o backup em si já foi gravado e marcado como sucesso), mas `Retention.error` contém a mensagem de erro agregado para que o operador veja o que falhou na limpeza. Isso permite diagnóstico (ex.: "storage delete probe failed" indica falta de permissão de delete nas credenciais de um storage target).
+
 ### `GET /api/dashboard/backup-stats` — backups e bytes por destino (RN-BACKUP-031)
 
 Endpoint novo, consumido pelos 4 gráficos de barras empilhadas do Dashboard (T-02): contagem de backups e soma de `blob_size_bytes`, agrupados por destino de armazenamento, em duas janelas fixas — diária dos últimos 30 dias e mensal do ano corrente (sempre os 12 meses, meses futuros zero-preenchidos). Sem parâmetros de query.
@@ -226,3 +237,4 @@ Antes de alterar:
 | 2026-09-16 | `BackupRunDTO.errorMessage`/`.logOutput` (todos os endpoints que retornam `BackupRunDTO`) | Conteúdo passa a ser o erro real da etapa que falhou (antes: frase genérica fixa) e o stdout/stderr capturado do comando remoto (antes: sempre `null`), ambos redigidos da senha do banco e truncados | Aditiva (nenhuma mudança de schema JSON, só do conteúdo) | Log de erro de backup não trazia detalhe suficiente para diagnosticar a causa da falha |
 | 2026-09-16 | `PUT /api/servers/{id}` | Quando `cronExpression` muda em um servidor já agendado (`nextRunAt` já preenchido), `nextRunAt` na resposta passa a refletir o novo horário imediatamente, em vez de manter o valor calculado a partir do cron anterior até o próximo ciclo do scheduler | Aditiva (nenhum campo novo de payload/resposta, só o valor de `nextRunAt` muda de comportamento) | Achado do Validator: editar cron de servidor já agendado não recalculava `nextRunAt` até a próxima claim (ver `docs/RegrasNegocio.md` RN-BACKUP-030) |
 | 2026-09-16 | `GET /api/dashboard/backup-stats` (novo); `GET /api/dashboard/summary` perde o campo `recentRuns` | Endpoint novo com backups/bytes por destino (diário 30 dias + mensal ano corrente); `recentRuns` removido do summary (só alimentava o gráfico de linha antigo, agora substituído) | **Breaking** para `recentRuns` (campo removido de `/api/dashboard/summary`); aditiva para o novo endpoint | Dashboard trocou o gráfico de tamanho/duração por execução por 4 gráficos de barras empilhadas por destino, pedido pelo usuário (ver `docs/RegrasNegocio.md` RN-BACKUP-031) |
+| 2026-09-28 | `POST /api/servers/{id}/backup-now` resposta | `Retention` ganha campos `error` e `failedDelete`; resposta agora retorna HTTP 200 com sweep error details em vez de `null Retention` quando há problemas de delete | Aditiva (novos campos opcionais `omitempty`; clientes antigos ignoram e continuam funcionando) | Resiliência: Sweep continua em erro de delete (não para no primeiro), e o operador precisa ver o que falhou na limpeza automaticamente — novos campos explicitam erros na resposta (ver `docs/RegrasNegocio.md` RN-BACKUP-003) |

@@ -89,4 +89,8 @@ Todas as regras abaixo estão `⚠ inferida` em `docs/RegrasNegocio.md`, aguarda
 
 ## Histórico de sincronização de documentação
 
-Ver tabela completa de estado real (com motivos) no resumo final desta tarefa, entregue na conversa que gerou este documento.
+| Data | Tarefa | Resumo | Documentos afetados |
+| --- | --- | --- | --- |
+| 2026-09-28 | [fix(retention): resolve GFS sweep stalling on delete errors + add delete permission probe](commit:ad5dd0f) | **Bug crítico corrigido:** RN-BACKUP-003 tinha dois bugs: (1) algoritmo `Decide` não marcava `monthsSeen` para blobs mantidos via RecentCount, causando double-count do mês (ex.: 4 backups em setembro com RecentCount=3 mantinha 4); (2) `Sweep` parava no primeiro erro de delete sem tentar os demais, travando limpeza para sempre se uma credencial faltasse permissão de delete. **Solução:** (1) Fix simples, marca `monthsSeen` antes de `continue` no RecentCount; (2) Sweep resiliente, continua em erro, agrega com `errors.Join()`, retorna resultado parcial + erro. Adicionado `ProbeDelete` em todos os backends de storage (Azure, S3, Filesystem) para testar permissão de delete durante "test-connection", capturando credenciais mal-escopadas antes de virarem problema silencioso. Melhorada observabilidade: log ERROR claro no scheduler, e resposta de `/backup-now` ganha campos `error`/`failedDelete` quando sweep falha. | RegrasNegocio.md (RN-BACKUP-003 ⚠ → confirmada), API.md (/backup-now response), Memoria.md (bug root-cause), Progresso.md (esta linha) |
+
+Ver tabela de estado **real** de documentação em `docs/RegrasNegocio.md` seção **Histórico** (entrada de 2026-09-28).
