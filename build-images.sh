@@ -84,7 +84,7 @@ for i in "${!names[@]}"; do
 done
 
 echo ""
-echo "=== Phase 3: Updating version and committing ==="
+echo "=== Phase 3: Updating version, docker-stack.yml, and committing ==="
 
 # Phase 3: Update prod-version and commit (only if all builds and pushes succeeded)
 # Write atomically to avoid truncated file on kill/crash
@@ -92,7 +92,22 @@ PROD_VERSION_TMP="${SCRIPT_DIR}/prod-version.tmp"
 printf '%s\n' "$NEW_VERSION" > "$PROD_VERSION_TMP"
 mv "$PROD_VERSION_TMP" prod-version
 
-git add prod-version
+# Pin docker-stack.yml to the exact version just published (never -latest):
+# Swarm only reliably redeploys a service when the image tag string in the
+# spec actually changes — a -latest tag whose content changes in the
+# registry does NOT guarantee `docker stack deploy`/`--force` repulls it
+# (see docs/Infraestrutura.md, incidente 2026-09-28). Rewriting the tag here
+# every release means the compose text always differs, so Swarm is forced
+# to pick up the new image every time.
+if [[ -f docker-stack.yml ]]; then
+  sed -i.bak -E "s|c3t4r4/backapeando:backend-[^[:space:]\"']+|c3t4r4/backapeando:backend-${NEW_VERSION}|" docker-stack.yml
+  sed -i.bak -E "s|c3t4r4/backapeando:worker-[^[:space:]\"']+|c3t4r4/backapeando:worker-${NEW_VERSION}|" docker-stack.yml
+  sed -i.bak -E "s|c3t4r4/backapeando:frontend-[^[:space:]\"']+|c3t4r4/backapeando:frontend-${NEW_VERSION}|" docker-stack.yml
+  rm -f docker-stack.yml.bak
+  echo "✓ docker-stack.yml pinned to ${NEW_VERSION}"
+fi
+
+git add prod-version docker-stack.yml
 git commit -m "chore(docker): bump version to ${NEW_VERSION}
 
 Build and push backend (API), worker, and frontend images:
@@ -100,7 +115,9 @@ Build and push backend (API), worker, and frontend images:
 - c3t4r4/backapeando:worker-${NEW_VERSION}
 - c3t4r4/backapeando:frontend-${NEW_VERSION}
 
-Plus latest tags for each component."
+Plus latest tags for each component. docker-stack.yml pinned to
+${NEW_VERSION} (not -latest) so the next \`docker stack deploy\` is
+guaranteed to pick up this build."
 
 echo ""
 echo "=== Success ==="
