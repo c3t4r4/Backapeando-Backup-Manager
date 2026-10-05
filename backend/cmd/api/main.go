@@ -68,6 +68,11 @@ func runServer() error {
 	defer pool.Close()
 
 	repos := repository.New(pool)
+	if n, err := repos.Servers.BackfillBlobPrefixes(ctx); err != nil {
+		return fmt.Errorf("backfill blob_prefix: %w", err)
+	} else if n > 0 {
+		slog.Info("backfilled_blob_prefix", "count", n)
+	}
 	sealer, err := crypto.NewSealer(cfg.MasterKey, cfg.MasterKeyPrevious)
 	if err != nil {
 		return fmt.Errorf("init sealer: %w", err)

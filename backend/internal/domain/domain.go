@@ -135,6 +135,9 @@ type Server struct {
 	SSHKeyFingerprint       *string
 	SSHHostKeyFingerprint   *string
 	StorageTargetID         *string
+	// BlobPrefix is the immutable storage folder for this server's dumps
+	// (RN-BACKUP-034). Set once at create; never updated when Name changes.
+	BlobPrefix              string
 	CronExpression          string
 	Enabled                 bool
 	Status                  ServerStatus

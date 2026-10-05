@@ -77,35 +77,6 @@ type backupNowResponse struct {
 	Retention *retentionResultDTO `json:"retention"`
 }
 
-// slugify converts a server name into a safe, single-path-segment folder
-// name for blob storage: lowercased, non-alphanumeric runs collapsed to a
-// single hyphen, leading/trailing hyphens trimmed. This is a security
-// boundary, not just cosmetics — the result is concatenated directly into a
-// blob name, so it must never be able to produce "..", a leading "/", or an
-// embedded "/" that would let a crafted server name escape its own prefix
-// and collide with (or list/delete) another server's blobs.
-func slugify(name string) string {
-	var b strings.Builder
-	lastWasHyphen := false
-	for _, r := range strings.ToLower(name) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			lastWasHyphen = false
-		default:
-			if !lastWasHyphen && b.Len() > 0 {
-				b.WriteRune('-')
-				lastWasHyphen = true
-			}
-		}
-	}
-	slug := strings.TrimRight(b.String(), "-")
-	if slug == "" {
-		slug = "server"
-	}
-	return slug
-}
-
 // BackupNow runs a full backup synchronously: pg_dump over SSH, streamed
 // directly into the server's configured storage target, followed by a
 // retention sweep (unless dryRun). See RN-BACKUP-006 (prerequisites) and
@@ -314,9 +285,7 @@ func (h *BackupHandlers) performBackup(ctx context.Context, server domain.Server
 		return "", 0, 0, 0, "", fmt.Errorf("start dump stream: %w", err)
 	}
 
-	slug := slugify(server.Name)
-	dbSlug := slugify(server.DBName)
-	blobName = fmt.Sprintf("%s/%s_%s.dump", slug, dbSlug, time.Now().UTC().Format("20060102T150405Z"))
+	blobName = backupcore.FormatBackupBlobName(backupcore.StoragePrefix(server), server.DBName, time.Now())
 
 	uploadStart := time.Now()
 	size, uploadErr := backend.UploadStream(ctx, blobName, stdout)
@@ -395,7 +364,8 @@ func (h *BackupHandlers) sweepRetention(ctx context.Context, server domain.Serve
 		return auditWriteFailureAfterDelete(ctx, h.Logger, serverID, runID, blobName, auditErr)
 	}
 
-	result, err := backupcore.SweepRetention(ctx, backend, slugify(server.Name)+"/", policy, server.ID, backupRunID, dryRun, h.RetentionDeletions, onAuditFailure)
+	prefix := backupcore.StoragePrefix(server) + "/"
+	result, err := backupcore.SweepRetention(ctx, backend, prefix, policy, server.ID, backupRunID, dryRun, backupcore.ReasonPostBackupSweep, h.RetentionDeletions, onAuditFailure)
 
 	dto := &retentionResultDTO{DryRun: dryRun}
 	if result != nil {
@@ -404,6 +374,9 @@ func (h *BackupHandlers) sweepRetention(ctx context.Context, server domain.Serve
 		} else {
 			dto.Deleted = result.Affected
 		}
+		if len(result.FailedDelete) > 0 {
+			dto.FailedDelete = result.FailedDelete
+		}
 	}
 
 	// If sweep had an error, include it in the response so the operator can see
@@ -411,9 +384,6 @@ func (h *BackupHandlers) sweepRetention(ctx context.Context, server domain.Serve
 	if err != nil {
 		errMsg := err.Error()
 		dto.Error = &errMsg
-		// Sweep does not return the set of blobs that failed to delete in the
-		// aggregated error, so we can't populate dto.FailedDelete. The error
-		// message itself (logged server-side) contains the details.
 		return dto, nil
 	}
 

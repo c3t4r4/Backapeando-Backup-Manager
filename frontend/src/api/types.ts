@@ -179,6 +179,8 @@ export interface RetentionResultDTO {
   dryRun: boolean
   wouldDelete?: string[] // blob names (dry-run only)
   deleted?: string[] // blob names (actual only)
+  error?: string // aggregated sweep error (delete permission, etc.)
+  failedDelete?: string[] // blob names whose DeleteBlob failed
 }
 
 /**

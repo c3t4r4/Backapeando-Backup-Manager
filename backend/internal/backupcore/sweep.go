@@ -29,8 +29,9 @@ type RetentionDeletionRecorder interface {
 // sites expose over their respective APIs (BackupHandlers.sweepRetention's
 // retentionResultDTO and the worker's log line).
 type SweepResult struct {
-	DryRun   bool
-	Affected []string // names deleted (dryRun=false) or that would be deleted (dryRun=true)
+	DryRun       bool
+	Affected     []string // names deleted (dryRun=false) or that would be deleted (dryRun=true)
+	FailedDelete []string // names whose DeleteBlob failed (never includes audit-after-delete failures)
 }
 
 // AuditWriteFailureAfterDeleteFunc is called by SweepRetention when a blob
@@ -43,6 +44,13 @@ type SweepResult struct {
 // so the log line keeps each call site's existing fields/shape.
 type AuditWriteFailureAfterDeleteFunc func(ctx context.Context, serverID, backupRunID, blobName string, auditErr error) error
 
+const (
+	// ReasonPostBackupSweep is the audit reason for retention after a backup run.
+	ReasonPostBackupSweep = "post-backup sweep"
+	// ReasonGlobalRetentionSweep is the audit reason for the async global purge.
+	ReasonGlobalRetentionSweep = "global retention sweep"
+)
+
 // SweepRetention lists a server's existing blobs under prefix, computes the
 // GFS retention decision for policy, and deletes everything Decide() did
 // not keep (unless dryRun), recording a retention_deletions audit row for
@@ -50,10 +58,20 @@ type AuditWriteFailureAfterDeleteFunc func(ctx context.Context, serverID, backup
 // rows are written — the result only reports what would be deleted
 // (RN-BACKUP-007).
 //
+// backupRunID may be empty for global sweeps that are not tied to a specific
+// run; in that case the audit row is written with backup_run_id NULL (the
+// column is nullable). Passing "" as a non-nil pointer would fail the UUID
+// cast in Postgres after the blob was already deleted.
+//
+// reason is stored on each audit row; if empty, ReasonPostBackupSweep is used.
+//
 // If onAuditFailure is nil, an audit-write failure after a successful delete
 // is silently ignored beyond being folded into the returned error — callers
 // that want the "log it no matter what" guarantee must pass a non-nil
 // onAuditFailure.
+//
+// FailedDelete lists only blobs where DeleteBlob itself failed — not audit
+// write failures after a successful delete.
 func SweepRetention(
 	ctx context.Context,
 	backend storage.Backend,
@@ -62,6 +80,7 @@ func SweepRetention(
 	serverID string,
 	backupRunID string,
 	dryRun bool,
+	reason string,
 	deletions RetentionDeletionRecorder,
 	onAuditFailure AuditWriteFailureAfterDeleteFunc,
 ) (*SweepResult, error) {
@@ -75,17 +94,26 @@ func SweepRetention(
 		retentionBlobs[i] = retention.BlobInfo{Name: b.Name, LastModified: b.LastModified}
 	}
 
-	runID := backupRunID
+	var runIDPtr *string
+	if backupRunID != "" {
+		runIDPtr = &backupRunID
+	}
+	if reason == "" {
+		reason = ReasonPostBackupSweep
+	}
+
+	var failedDelete []string
 	del := func(delCtx context.Context, blobName string) error {
 		if err := backend.DeleteBlob(delCtx, blobName); err != nil {
+			failedDelete = append(failedDelete, blobName)
 			return err
 		}
 		// The blob is now irrevocably gone. If the audit row fails to
 		// write, the blob name must not be lost — see
 		// AuditWriteFailureAfterDeleteFunc and retention.Sweep's contract.
-		if err := deletions.Create(delCtx, serverID, &runID, blobName, "post-backup sweep"); err != nil {
+		if err := deletions.Create(delCtx, serverID, runIDPtr, blobName, reason); err != nil {
 			if onAuditFailure != nil {
-				return onAuditFailure(delCtx, serverID, runID, blobName, err)
+				return onAuditFailure(delCtx, serverID, backupRunID, blobName, err)
 			}
 			return fmt.Errorf("record retention deletion audit for blob %q (blob already deleted): %w", blobName, err)
 		}
@@ -97,7 +125,7 @@ func SweepRetention(
 	// Even if sweep has errors, return the result with successful deletions
 	// already recorded in affected. Callers can inspect the error separately
 	// to learn which blobs failed to delete.
-	result := &SweepResult{DryRun: dryRun, Affected: affected}
+	result := &SweepResult{DryRun: dryRun, Affected: affected, FailedDelete: failedDelete}
 	if err != nil {
 		return result, fmt.Errorf("sweep: %w", err)
 	}

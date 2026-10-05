@@ -60,6 +60,11 @@ func runWorker() error {
 
 	// Initialize repositories
 	repos := repository.New(pool)
+	if n, err := repos.Servers.BackfillBlobPrefixes(ctx); err != nil {
+		return fmt.Errorf("backfill blob_prefix: %w", err)
+	} else if n > 0 {
+		slog.Info("backfilled_blob_prefix", "count", n)
+	}
 
 	// Initialize crypto sealer for decrypting SSH keys and SAS tokens
 	sealer, err := crypto.NewSealer(cfg.MasterKey, cfg.MasterKeyPrevious)

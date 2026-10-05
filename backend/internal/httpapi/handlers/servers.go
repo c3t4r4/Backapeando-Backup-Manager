@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"backapeando-backup-manager/internal/backupcore"
 	"backapeando-backup-manager/internal/crypto"
 	"backapeando-backup-manager/internal/domain"
 	"backapeando-backup-manager/internal/repository"
@@ -237,6 +238,8 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		DBPasswordEncrypted: encryptedPassword,
 		PgDumpExtraArgs:     req.PgDumpExtraArgs, MySQLDumpExtraArgs: req.MySQLDumpExtraArgs,
 		SqlCmdExtraArgs: req.SqlCmdExtraArgs, StorageTargetID: req.StorageTargetID,
+		// RN-BACKUP-034: immutable storage folder; never updated on rename.
+		BlobPrefix:     backupcore.Slugify(req.Name),
 		CronExpression: req.CronExpression,
 	})
 	if err != nil {

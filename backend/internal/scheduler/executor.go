@@ -230,7 +230,7 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 	}
 
 	// Build blob name: <slugified-server>/<dbname>_<timestamp>.dump
-	blobName := fmt.Sprintf("%s/%s_%s.dump", slugify(server.Name), server.DBName, time.Now().Format(time.RFC3339))
+	blobName := backupcore.FormatBackupBlobName(backupcore.StoragePrefix(*server), server.DBName, time.Now())
 
 	// Upload stream to the storage backend
 	uploadStart := time.Now()
@@ -300,7 +300,7 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 	// (retention cleanup is post-hoc and the backup itself succeeded), but the
 	// error is logged at ERROR level because it indicates an operator-facing
 	// problem: storage credential lacks delete permission, or a blob is stuck.
-	if err := e.sweepRetention(ctx, backend, server, backupRun.ID); err != nil {
+	if _, err := e.sweepRetention(ctx, backend, server, backupRun.ID, backupcore.ReasonPostBackupSweep); err != nil {
 		e.logger.ErrorContext(ctx, "retention sweep encountered errors; some blobs may not have been deleted",
 			slog.String("serverId", server.ID),
 			slog.String("backupRunId", backupRun.ID),
@@ -316,15 +316,19 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 	return nil
 }
 
-// sweepRetention runs the GFS retention policy post-backup (non-fatal),
+// sweepRetention runs the GFS retention policy (non-fatal for the caller),
 // delegating the list/decide/delete/audit sequence to the shared
 // backupcore.SweepRetention helper also used by
 // httpapi/handlers/backup.go's sweepRetention — see docs/Arquitetura.md for
 // the duplication this replaced.
-func (e *BackupExecutor) sweepRetention(ctx context.Context, backend storage.Backend, server *domain.Server, backupRunID string) error {
+//
+// backupRunID may be empty for global sweeps; reason should be
+// backupcore.ReasonPostBackupSweep or backupcore.ReasonGlobalRetentionSweep.
+// On partial delete failures, result may still list successfully deleted blobs.
+func (e *BackupExecutor) sweepRetention(ctx context.Context, backend storage.Backend, server *domain.Server, backupRunID, reason string) (*backupcore.SweepResult, error) {
 	dbPolicy, err := e.repos.RetentionPolicies.EffectiveForServer(ctx, server.ID)
 	if err != nil {
-		return fmt.Errorf("get retention policy: %w", err)
+		return nil, fmt.Errorf("get retention policy: %w", err)
 	}
 
 	policy := retention.Policy{RecentCount: dbPolicy.RecentCount, MonthlyCount: dbPolicy.MonthlyCount}
@@ -340,40 +344,17 @@ func (e *BackupExecutor) sweepRetention(ctx context.Context, backend storage.Bac
 		return fmt.Errorf("record retention deletion audit for blob %q (blob already deleted): %w", blobName, auditErr)
 	}
 
-	result, err := backupcore.SweepRetention(ctx, backend, slugify(server.Name)+"/", policy, server.ID, backupRunID, false, e.repos.RetentionDeletions, onAuditFailure)
+	prefix := backupcore.StoragePrefix(*server) + "/"
+	result, err := backupcore.SweepRetention(ctx, backend, prefix, policy, server.ID, backupRunID, false, reason, e.repos.RetentionDeletions, onAuditFailure)
+	if result != nil {
+		e.logger.InfoContext(ctx, "retention sweep completed",
+			slog.String("serverId", server.ID),
+			slog.Int("deletedCount", len(result.Affected)),
+		)
+	}
 	if err != nil {
-		return err
+		return result, err
 	}
-
-	e.logger.InfoContext(ctx, "retention sweep completed",
-		slog.String("serverId", server.ID),
-		slog.Int("deletedCount", len(result.Affected)),
-	)
-	return nil
+	return result, nil
 }
 
-// slugify converts a server name into a safe, single-path-segment folder name
-// for blob storage: lowercased, non-alphanumeric runs collapsed to a single
-// hyphen, leading/trailing hyphens trimmed. This is a security boundary — the
-// result is concatenated directly into a blob name.
-func slugify(name string) string {
-	var b strings.Builder
-	lastWasHyphen := false
-	for _, r := range strings.ToLower(name) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			lastWasHyphen = false
-		default:
-			if !lastWasHyphen && b.Len() > 0 {
-				b.WriteRune('-')
-				lastWasHyphen = true
-			}
-		}
-	}
-	slug := strings.TrimRight(b.String(), "-")
-	if slug == "" {
-		slug = "server"
-	}
-	return slug
-}

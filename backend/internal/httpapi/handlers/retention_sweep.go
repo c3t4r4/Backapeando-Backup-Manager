@@ -19,7 +19,6 @@ func (h *RetentionSweepHandlers) Trigger(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
 		"id":     req.ID,
 		"status": req.Status,
@@ -42,11 +41,11 @@ func (h *RetentionSweepHandlers) Latest(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"id":        req.ID,
-		"status":    req.Status,
-		"summary":   req.Summary,
-		"error":     req.Error,
-		"startedAt": req.StartedAt,
+		"id":         req.ID,
+		"status":     req.Status,
+		"summary":    req.Summary,
+		"error":      req.Error,
+		"startedAt":  req.StartedAt,
 		"finishedAt": req.FinishedAt,
 	})
 }

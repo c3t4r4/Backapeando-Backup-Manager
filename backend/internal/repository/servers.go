@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"backapeando-backup-manager/internal/backupcore"
 	"backapeando-backup-manager/internal/domain"
 )
 
@@ -21,7 +23,7 @@ const serverColumns = `
 	id, name, host, port, ssh_user, db_engine, deployment_mode, container_name, db_name, db_user,
 	pg_dump_extra_args, mysql_dump_extra_args, sqlcmd_extra_args, db_password_encrypted,
 	ssh_private_key_encrypted, ssh_public_key, ssh_key_fingerprint, ssh_host_key_fingerprint,
-	storage_target_id, cron_expression, enabled, status,
+	storage_target_id, COALESCE(blob_prefix, '') AS blob_prefix, cron_expression, enabled, status,
 	last_test_connection_at, last_test_connection_ok, last_test_connection_error, next_run_at, last_scheduled_at, created_at, updated_at
 `
 
@@ -31,7 +33,7 @@ func scanServer(row pgx.Row) (domain.Server, error) {
 		&s.ID, &s.Name, &s.Host, &s.Port, &s.SSHUser, &s.DBEngine, &s.DeploymentMode, &s.ContainerName, &s.DBName, &s.DBUser,
 		&s.PgDumpExtraArgs, &s.MySQLDumpExtraArgs, &s.SqlCmdExtraArgs, &s.DBPasswordEncrypted,
 		&s.SSHPrivateKeyEncrypted, &s.SSHPublicKey, &s.SSHKeyFingerprint, &s.SSHHostKeyFingerprint,
-		&s.StorageTargetID, &s.CronExpression, &s.Enabled, &s.Status,
+		&s.StorageTargetID, &s.BlobPrefix, &s.CronExpression, &s.Enabled, &s.Status,
 		&s.LastTestConnectionAt, &s.LastTestConnectionOK, &s.LastTestConnectionError, &s.NextRunAt, &s.LastScheduledAt, &s.CreatedAt, &s.UpdatedAt,
 	)
 	return s, err
@@ -51,13 +53,17 @@ func (r *ServerRepo) Create(ctx context.Context, s domain.Server) (domain.Server
 	if s.ID == "" {
 		s.ID = uuid.New().String()
 	}
+	// RN-BACKUP-034: blob_prefix is immutable after create; default from Name.
+	if strings.TrimSpace(s.BlobPrefix) == "" {
+		s.BlobPrefix = backupcore.Slugify(s.Name)
+	}
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO servers (id, name, host, port, ssh_user, db_engine, deployment_mode, container_name, db_name, db_user,
 		                      pg_dump_extra_args, mysql_dump_extra_args, sqlcmd_extra_args, db_password_encrypted,
-		                      storage_target_id, cron_expression)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		                      storage_target_id, blob_prefix, cron_expression)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		RETURNING `+serverColumns, s.ID, s.Name, s.Host, s.Port, s.SSHUser, s.DBEngine, s.DeploymentMode, s.ContainerName, s.DBName, s.DBUser,
-		s.PgDumpExtraArgs, s.MySQLDumpExtraArgs, s.SqlCmdExtraArgs, s.DBPasswordEncrypted, s.StorageTargetID, s.CronExpression)
+		s.PgDumpExtraArgs, s.MySQLDumpExtraArgs, s.SqlCmdExtraArgs, s.DBPasswordEncrypted, s.StorageTargetID, s.BlobPrefix, s.CronExpression)
 	created, err := scanServer(row)
 	if err != nil {
 		return domain.Server{}, fmt.Errorf("create server: %w", err)
@@ -96,8 +102,9 @@ func (r *ServerRepo) Get(ctx context.Context, id string) (domain.Server, error) 
 }
 
 // Update modifies the non-secret, user-editable fields of a server. It does
-// not touch SSH key material, status, or scheduling state — those are
-// mutated by their own dedicated methods so each has a single writer.
+// not touch SSH key material, status, scheduling state, or blob_prefix
+// (RN-BACKUP-034: prefix is immutable after create) — those are mutated by
+// their own dedicated methods so each has a single writer.
 func (r *ServerRepo) Update(ctx context.Context, s domain.Server) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE servers
@@ -400,4 +407,64 @@ func (r *ServerRepo) RescheduleNextRunAt(ctx context.Context, serverID string, n
 		return fmt.Errorf("reschedule next run at: %w", err)
 	}
 	return nil
+}
+
+// ListMissingBlobPrefix returns servers whose blob_prefix is still NULL
+// after migration 000008 (needs one-shot Go Slugify backfill).
+func (r *ServerRepo) ListMissingBlobPrefix(ctx context.Context) ([]domain.Server, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+serverColumns+`
+		FROM servers
+		WHERE blob_prefix IS NULL
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list servers missing blob_prefix: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.Server
+	for rows.Next() {
+		s, err := scanServer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan server: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// SetBlobPrefix sets blob_prefix only when it is still NULL (idempotent
+// backfill / create-path safety). Returns true if a row was updated.
+func (r *ServerRepo) SetBlobPrefix(ctx context.Context, serverID, prefix string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE servers
+		SET blob_prefix = $2, updated_at = now()
+		WHERE id = $1 AND blob_prefix IS NULL
+	`, serverID, prefix)
+	if err != nil {
+		return false, fmt.Errorf("set blob_prefix: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// BackfillBlobPrefixes fills NULL blob_prefix values using backupcore.Slugify
+// of the current Name (RN-BACKUP-034). Idempotent. Returns how many rows
+// were updated.
+func (r *ServerRepo) BackfillBlobPrefixes(ctx context.Context) (int, error) {
+	servers, err := r.ListMissingBlobPrefix(ctx)
+	if err != nil {
+		return 0, err
+	}
+	updated := 0
+	for _, s := range servers {
+		ok, err := r.SetBlobPrefix(ctx, s.ID, backupcore.Slugify(s.Name))
+		if err != nil {
+			return updated, err
+		}
+		if ok {
+			updated++
+		}
+	}
+	return updated, nil
 }

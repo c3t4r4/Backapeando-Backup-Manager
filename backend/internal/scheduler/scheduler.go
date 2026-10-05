@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"backapeando-backup-manager/internal/backupcore"
 	"backapeando-backup-manager/internal/crypto"
 	"backapeando-backup-manager/internal/repository"
 	"backapeando-backup-manager/internal/storage"
@@ -162,7 +163,10 @@ func (s *Scheduler) poll() {
 						slog.String("error", err.Error()),
 					)
 				} else if req != nil {
-					s.logger.Info("claiming retention sweep request", "id", req.ID)
+					s.logger.Info("claimed retention sweep request",
+						slog.String("id", req.ID),
+						slog.String("status", req.Status),
+					)
 					go s.runGlobalSweep(s.ctx, req.ID)
 				}
 			}
@@ -400,15 +404,9 @@ func (s *Scheduler) processQueuedRuns(ctx context.Context, maxRuns int) {
 
 
 // runGlobalSweep executes a global retention sweep across all eligible servers.
+// The request must already be status=running (ClaimPending flips pending→running
+// atomically); this method does not call MarkRunning again.
 func (s *Scheduler) runGlobalSweep(ctx context.Context, requestID string) {
-	if err := s.repos.RetentionSweepRequests.MarkRunning(ctx, requestID); err != nil {
-		s.logger.ErrorContext(ctx, "failed to mark retention sweep request running",
-			slog.String("requestId", requestID),
-			slog.String("error", err.Error()),
-		)
-		return
-	}
-
 	servers, err := s.repos.Servers.ListEligibleForSweep(ctx)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to list eligible servers for sweep",
@@ -425,12 +423,13 @@ func (s *Scheduler) runGlobalSweep(ctx context.Context, requestID string) {
 	}
 
 	summary := map[string]interface{}{
-		"serversProcessed": 0,
+		"serversProcessed":  0,
 		"totalBlobsDeleted": 0,
 		"errors":            []map[string]interface{}{},
 	}
 	serverErrors := []map[string]interface{}{}
 	totalDeleted := 0
+	serversProcessed := 0
 
 	for _, server := range servers {
 		target, err := s.repos.StorageTargets.Get(ctx, *server.StorageTargetID)
@@ -460,7 +459,13 @@ func (s *Scheduler) runGlobalSweep(ctx context.Context, requestID string) {
 			continue
 		}
 
-		if err := s.executor.sweepRetention(ctx, backend, server, ""); err != nil {
+		// Empty backupRunID → audit rows with backup_run_id NULL (global purge).
+		result, err := s.executor.sweepRetention(ctx, backend, server, "", backupcore.ReasonGlobalRetentionSweep)
+		if result != nil {
+			totalDeleted += len(result.Affected)
+		}
+		serversProcessed++
+		if err != nil {
 			s.logger.ErrorContext(ctx, "failed to sweep retention for server",
 				slog.String("serverId", server.ID),
 				slog.String("error", err.Error()),
@@ -469,11 +474,10 @@ func (s *Scheduler) runGlobalSweep(ctx context.Context, requestID string) {
 				"serverId": server.ID,
 				"error":    err.Error(),
 			})
-		} else {
-			summary["serversProcessed"] = summary["serversProcessed"].(int) + 1
 		}
 	}
 
+	summary["serversProcessed"] = serversProcessed
 	summary["totalBlobsDeleted"] = totalDeleted
 	if len(serverErrors) > 0 {
 		summary["errors"] = serverErrors
@@ -488,7 +492,7 @@ func (s *Scheduler) runGlobalSweep(ctx context.Context, requestID string) {
 
 	s.logger.Info("retention sweep completed",
 		slog.String("requestId", requestID),
-		slog.Int("serversProcessed", summary["serversProcessed"].(int)),
+		slog.Int("serversProcessed", serversProcessed),
 		slog.Int("totalBlobsDeleted", totalDeleted),
 	)
 }

@@ -63,6 +63,8 @@ Rotas isentas de autenticação/CSRF (`publicPaths` em `router.go`): `GET /healt
 | DELETE | `/api/storage-targets/{id}` | Remove destino | Sim | — | Ativo |
 | GET | `/api/retention-policy/default` | Política de retenção global | Sim | RN-BACKUP-003 | Ativo |
 | PUT | `/api/retention-policy/default` | Atualiza política global | Sim | RN-BACKUP-003, RN-BACKUP-004 | Ativo |
+| POST | `/api/retention-sweep` | Enfileira expurgo GFS global (async no worker) | Sim | RN-BACKUP-003, RN-BACKUP-033 | Ativo |
+| GET | `/api/retention-sweep/latest` | Status/summary do último pedido de expurgo global | Sim | RN-BACKUP-033 | Ativo |
 | GET | `/api/dashboard/summary` | Resumo agregado para o dashboard | Sim | — | Ativo |
 | GET | `/api/dashboard/backup-stats` | Backups e bytes por destino, diário (30 dias) e mensal (ano corrente) | Sim | RN-BACKUP-031 | Ativo |
 | GET | `/api/admin-users` | Lista administradores (nunca inclui `password_hash`) | Sim | RN-AUTH-001 | Ativo |
@@ -159,9 +161,40 @@ Campos novos na resposta JSON `backupNowResponse.Retention` (`retentionResultDTO
 | Campo | Tipo | Observação |
 | --- | --- | --- |
 | `error` | `string?` | Mensagem de erro agregado se a varredura de retenção encontrou erros ao deletar blobs (ex.: credencial sem permissão de delete). Null se sem erro. |
-| `failedDelete` | `string[]?` | Lista de nomes de blobs que falharam ao ser deletados (não preenchido na versão atual; presente para extensibilidade futura quando `Sweep` passar a retornar nomes específicos de falhas). |
+| `failedDelete` | `string[]?` | Nomes dos blobs cujo `DeleteBlob` falhou (não inclui falha de audit após delete bem-sucedido). Preenchido quando há erro parcial de limpeza. |
 
-**Comportamento:** Antes, se o sweep tivesse qualquer erro de delete, a resposta omitia `Retention` inteiramente (`null`). Agora, a resposta HTTP é sempre **200 OK** mesmo com erros de sweep (o backup em si já foi gravado e marcado como sucesso), mas `Retention.error` contém a mensagem de erro agregado para que o operador veja o que falhou na limpeza. Isso permite diagnóstico (ex.: "storage delete probe failed" indica falta de permissão de delete nas credenciais de um storage target).
+**Comportamento:** A resposta HTTP é sempre **200 OK** mesmo com erros de sweep (o backup em si já foi gravado e marcado como sucesso). `Retention.error` traz a mensagem agregada; `Retention.failedDelete` lista os blobs que não puderam ser excluídos. Isso permite diagnóstico (ex.: falta de permissão de delete nas credenciais do storage target).
+
+### `POST /api/retention-sweep` / `GET /api/retention-sweep/latest` — expurgo global (RN-BACKUP-033)
+
+Enfileira uma varredura GFS em todos os servidores elegíveis (`enabled`, `ready`, com storage target). O worker (`cmd/worker`) faz claim atômico e executa o sweep; a API só cria o pedido e permite polling.
+
+**`POST /api/retention-sweep`** — body vazio `{}`; resposta **202 Accepted**:
+
+```json
+{ "id": "uuid", "status": "pending" }
+```
+
+**`GET /api/retention-sweep/latest`** — **200 OK**:
+
+```json
+{
+  "id": "uuid",
+  "status": "completed",
+  "summary": {
+    "serversProcessed": 2,
+    "totalBlobsDeleted": 5,
+    "errors": []
+  },
+  "error": null,
+  "startedAt": "...",
+  "finishedAt": "..."
+}
+```
+
+Se nunca houve pedido: `{ "status": "no_requests" }`.
+
+Se o POST retornar **404** em produção, ver checklist em `docs/Infraestrutura.md` (binário antigo / Swarm sem redeploy) — não confundir com path errado no frontend.
 
 ### `GET /api/dashboard/backup-stats` — backups e bytes por destino (RN-BACKUP-031)
 
@@ -238,3 +271,5 @@ Antes de alterar:
 | 2026-09-16 | `PUT /api/servers/{id}` | Quando `cronExpression` muda em um servidor já agendado (`nextRunAt` já preenchido), `nextRunAt` na resposta passa a refletir o novo horário imediatamente, em vez de manter o valor calculado a partir do cron anterior até o próximo ciclo do scheduler | Aditiva (nenhum campo novo de payload/resposta, só o valor de `nextRunAt` muda de comportamento) | Achado do Validator: editar cron de servidor já agendado não recalculava `nextRunAt` até a próxima claim (ver `docs/RegrasNegocio.md` RN-BACKUP-030) |
 | 2026-09-16 | `GET /api/dashboard/backup-stats` (novo); `GET /api/dashboard/summary` perde o campo `recentRuns` | Endpoint novo com backups/bytes por destino (diário 30 dias + mensal ano corrente); `recentRuns` removido do summary (só alimentava o gráfico de linha antigo, agora substituído) | **Breaking** para `recentRuns` (campo removido de `/api/dashboard/summary`); aditiva para o novo endpoint | Dashboard trocou o gráfico de tamanho/duração por execução por 4 gráficos de barras empilhadas por destino, pedido pelo usuário (ver `docs/RegrasNegocio.md` RN-BACKUP-031) |
 | 2026-09-28 | `POST /api/servers/{id}/backup-now` resposta | `Retention` ganha campos `error` e `failedDelete`; resposta agora retorna HTTP 200 com sweep error details em vez de `null Retention` quando há problemas de delete | Aditiva (novos campos opcionais `omitempty`; clientes antigos ignoram e continuam funcionando) | Resiliência: Sweep continua em erro de delete (não para no primeiro), e o operador precisa ver o que falhou na limpeza automaticamente — novos campos explicitam erros na resposta (ver `docs/RegrasNegocio.md` RN-BACKUP-003) |
+| 2026-10-05 | `POST /api/retention-sweep`, `GET /api/retention-sweep/latest` | Documentados formalmente; comportamento do worker corrigido (claim atômico, audit com `backup_run_id` NULL, `totalBlobsDeleted` real no summary) | Aditiva (documentação; contrato HTTP inalterado: 202 + poll) | RN-BACKUP-033; reincidência do 404 em produção era deploy, não path |
+| 2026-10-05 | `POST /api/servers/{id}/backup-now` resposta | `retention.failedDelete` passa a ser preenchido com os nomes dos blobs cujo delete falhou | Aditiva (campo já existia no contrato; agora efetivo) | Observabilidade da retenção parcial (RN-BACKUP-003) |

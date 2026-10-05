@@ -230,6 +230,27 @@ Docker Swarm **não suporta** a sintaxe longa de `depends_on` com `condition:` (
    - `api` e `worker` podem fazer crash-loop por ~10-50s enquanto Postgres/Redis inicializam
    - `web` sobe normalmente mas requests falham com 5xx até `api` estar healthy
 
+### Checklist — `POST /api/retention-sweep` retorna 404
+
+Sintoma clássico de **binário de API antigo** (a rota existe no código desde v1.0.5+; o frontend pode já mostrar o botão “Rodar expurgo agora” enquanto a API no Swarm ainda é anterior). Não é mismatch de path Nginx/Traefik se outras rotas `/api/*` funcionam.
+
+1. Conferir versão efetiva:
+   ```bash
+   curl -sS https://<APP_DOMAIN>/api/health
+   ```
+   - Sem campo `version`, ou versão &lt; a esperada em `prod-version` / `docker-stack.yml` → binário desatualizado.
+2. Garantir imagens publicadas (`./build-images.sh`) e redeploy:
+   ```bash
+   docker stack deploy -c docker-stack.yml backapeando
+   ```
+3. Se a versão do health ainda não mudar, forçar com registry auth:
+   ```bash
+   docker service update --force --with-registry-auth backapeando_api
+   docker service update --force --with-registry-auth backapeando_worker
+   docker service update --force --with-registry-auth backapeando_web
+   ```
+4. Revalidar: health com a versão nova; `POST /api/retention-sweep` → **202** (não 404); worker processa (`GET /api/retention-sweep/latest`).
+
 ### Rollback
 
 1. `a definir` — procedimento de rollback em produção não documentado nesta tarefa; consultar quem opera o Swarm/Traefik/Portainer (geridos fora deste repositório).
@@ -310,3 +331,5 @@ Não coberto neste repositório para produção — o serviço já está declara
 | 2026-09-17 | `build-images.sh` passa a builda as 3 imagens com `--platform linux/amd64` explícito no `docker build` | ci/cd | Servidor de produção roda `linux/amd64`; sem o flag, a imagem herdava a arquitetura nativa do host local (risco de imagem arm64 incompatível ao buildar em Mac Apple Silicon) | `.claude/plans/backapeando-2026-09-17-build-images-amd64.md` |
 | 2026-09-28 | `docker-compose.prod.yml` corrigido: nomes de imagem (`backapeando-api:latest`, `backapeando-worker:latest`, `backapeando-web:latest`) não batiam com o que `build-images.sh` realmente publica — agora usa `c3t4r4/backapeando:backend-latest`/`worker-latest`/`frontend-latest`, igual a `docker-stack.yml`. Nota operacional adicionada ao procedimento de deploy sobre tags `latest` não redeployando sozinhas no Swarm (ver seção "Procedimento" acima) | prod | Diagnóstico de 3 sintomas em produção (expurgo 404, versão indisponível, blobs vazios) — causa raiz era binário desatualizado, Swarm nunca repuxou a imagem `-latest` mais recente após `build-images.sh` | `.claude/plans/preciso-verificar-que-quando-abstract-flask.md` |
 | 2026-09-28 | `docker-stack.yml` migrado de tags `-latest` para tags de versão fixa (`backend-v1.0.6`, `worker-v1.0.6`, `frontend-v1.0.6`); `build-images.sh` passa a reescrever essas 3 linhas automaticamente a cada execução bem-sucedida (mesmo commit que bumpa `prod-version`), garantindo que o compose sempre reflita a versão recém-publicada | prod, ci/cd | `--force`/`docker stack deploy` com tag `-latest` inalterada no texto do compose **não corrigiu** o incidente do mesmo dia (401/404 persistindo mesmo após redeploy forçado) — decisão do usuário, após confirmar que o workaround documentado horas antes não foi suficiente, de eliminar a ambiguidade de vez fixando a versão exata no compose | `.claude/plans/preciso-verificar-que-quando-abstract-flask.md` |
+| 2026-10-05 | Checklist operacional “404 em `POST /api/retention-sweep` → verificar `/api/health`” adicionado ao procedimento de deploy | prod | Reincidência do sintoma (Settings → Rodar expurgo → 404); causa raiz continua sendo binário antigo no Swarm, não bug de rota no código | `.cursor/plans/analise_retencao_expurgo_24ceed02.plan.md` |
+| 2026-10-05 | Migração `000008_servers_blob_prefix` + backfill idempotente em `cmd/api` e `cmd/worker` após `db.Migrate` | prod, dev | RN-BACKUP-034: prefixo de storage imutável no rename; Slugify aplicado em Go (não SQL) | `.cursor/plans/pendencias_retencao_blobs_6f472632.plan.md` |

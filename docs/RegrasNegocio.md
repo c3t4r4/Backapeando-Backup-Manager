@@ -3,7 +3,7 @@
 > **Documento de prioridade 3 na ordem de leitura obrigatória.**
 > Memória viva de todas as regras de negócio do sistema, tela por tela, e de todas as regras de tomada de decisão na lógica das páginas e dos objetos.
 
-Última atualização: 2026-09-16 (recálculo imediato de `next_run_at` ao editar cron de servidor já agendado)
+Última atualização: 2026-10-05 (RN-BACKUP-034 blob_prefix + failedDelete + naming unificado)
 
 ---
 
@@ -81,7 +81,7 @@
 | T-07 | Destinos de armazenamento       | `/storage-targets`          | `frontend/src/views/StorageTargetsView.vue`    | admin               | RN-STORAGE-001                                                                           | ⚠ inferida |
 | T-08 | Novo destino de armazenamento   | `/storage-targets/new`      | `frontend/src/views/StorageTargetNewView.vue`  | admin               | RN-STORAGE-001                                                                           | ⚠ inferida |
 | T-09 | Editar destino de armazenamento | `/storage-targets/:id/edit` | `frontend/src/views/StorageTargetEditView.vue` | admin               | RN-STORAGE-001                                                                           | ⚠ inferida |
-| T-10 | Configurações                   | `/settings`                 | `frontend/src/views/SettingsView.vue`          | admin               | RN-BACKUP-003, RN-BACKUP-004                                                             | ⚠ inferida |
+| T-10 | Configurações                   | `/settings`                 | `frontend/src/views/SettingsView.vue`          | admin               | RN-BACKUP-003, RN-BACKUP-004, RN-BACKUP-033                                              | ⚠ inferida |
 | T-11 | Administradores                 | `/admin-users`              | `frontend/src/views/AdminUsersView.vue`        | admin               | RN-AUTH-001, RN-AUTH-002, RN-AUTH-003                                                    | confirmada |
 | T-12 | Novo administrador              | `/admin-users/new`          | `frontend/src/views/AdminUserNewView.vue`      | admin               | RN-AUTH-001                                                                              | confirmada |
 | T-13 | Editar administrador            | `/admin-users/:id/edit`     | `frontend/src/views/AdminUserEditView.vue`     | admin               | RN-AUTH-001, RN-AUTH-002, RN-AUTH-003                                                    | confirmada |
@@ -156,6 +156,7 @@ Papel único detectado: `admin` — sistema de operador único, sem múltiplos p
 - **Motivo da regra:** equilibrar custo de armazenamento com histórico suficiente para recuperação (padrão Grandfather-Father-Son).
 - **Bug corrigido (2026-09-28):** Algoritmo `Decide` não marcava `monthsSeen` ao manter blobs via `RecentCount`, causando double-count do mês quando havia >RecentCount backups no mesmo mês (ex.: 4 backups em setembro com RecentCount=3 mantinha 4 em vez de 3). Fixo em commit `ad5dd0f`.
 - **Resiliência (2026-09-28):** `Sweep` agora continua mesmo com erros de delete em blobs individuais, agrega erros via `errors.Join()`, permitindo limpeza parcial em caso de credencial sem permissão de delete. Erros são reportados via log ERROR e campos `error`/`failedDelete` na resposta HTTP.
+- **Observabilidade (2026-10-05):** `backupcore.SweepResult.FailedDelete` lista os blobs cujo `DeleteBlob` falhou; `/backup-now` popula `retention.failedDelete` de fato (antes o campo existia no DTO mas ficava sempre vazio).
 
 ### RN-BACKUP-004 — Contagens de retenção não podem ser ambas zero
 
@@ -524,6 +525,39 @@ Papel único detectado: `admin` — sistema de operador único, sem múltiplos p
 - **Motivo da regra:** bug de timezone é silencioso (nenhuma exceção, nenhum aviso) — operador ve cron fire 3h cedo todos os dias sem nenhuma indicação de que a hora está errada. Fixar a location no código (não só na env var) garante comportamento mesmo se o container/máquina ganhar um `TZ` diferente ou nenhum no futuro — defesa em profundidade contra recorrência.
 - **Caso não previsto:** servidores que já têm `next_run_at` calculado em UTC (antes desta correção) continuarão com esse valor até o próximo recálculo natural (próximo ciclo de `claimAndEnqueue` após o cron antigo disparar, ou edição manual do cron via `PUT /api/servers/{id}`, que já recalcula imediatamente por RN-BACKUP-030). Sem migration de fix retroativo neste plano — corrige o comportamento prospectivo.
 
+### RN-BACKUP-033 — Expurgo global assíncrono (retenção GFS sob demanda)
+
+- **Tela:** T-10
+- **Status:** ⚠ inferida
+- **Origem:** código (`POST/GET /api/retention-sweep`, worker `ClaimPending` + `runGlobalSweep`); corrigido em 2026-10-05 (audit com `backup_run_id` NULL, claim atômico, `totalBlobsDeleted` real)
+
+| Condição | Resultado | Fonte | Status |
+| --- | --- | --- | --- |
+| Admin autentica e dispara `POST /api/retention-sweep` | Cria `retention_sweep_requests` com `status=pending`; resposta **202** com `{id, status}` | `handlers/retention_sweep.go` `Trigger` | ⚠ inferida |
+| Worker faz poll e há pedido `pending` | `ClaimPending` faz `UPDATE … pending→running` atômico (CTE + `FOR UPDATE SKIP LOCKED`); depois `runGlobalSweep` | `repository/retention_sweep_requests.go`, `scheduler.go` | ⚠ inferida |
+| Servidor elegível: `enabled=true`, `status=ready`, `storage_target_id IS NOT NULL` | Sweep GFS no prefixo `slugify(name)/`; audit `retention_deletions` com `backup_run_id` **NULL** e reason `global retention sweep` | `ListEligibleForSweep`, `backupcore.SweepRetention` | ⚠ inferida |
+| Sweep pós-backup (automático) | Mesmo algoritmo GFS; audit com `backup_run_id` do run e reason `post-backup sweep`; falha de sweep **não** falha o backup | `executor.sweepRetention` | ⚠ inferida |
+| Summary do pedido global | Inclui `serversProcessed`, `totalBlobsDeleted` (soma de deletes bem-sucedidos) e `errors` por servidor | `runGlobalSweep` | ⚠ inferida |
+
+- **Motivo da regra:** permitir limpeza sob demanda sem esperar o próximo backup; separar auditoria do path global (sem run) do path pós-backup.
+- **Ops:** se `POST /api/retention-sweep` retornar **404**, a causa mais comum é binário de API antigo no Swarm — ver checklist em `docs/Infraestrutura.md` (`GET /api/health` sem `version` ou versão &lt; a esperada).
+
+### RN-BACKUP-034 — Prefixo de blob imutável (`blob_prefix`)
+
+- **Tela:** T-04 / T-05 (create/update de servidor)
+- **Status:** ⚠ inferida
+- **Origem:** código — coluna `servers.blob_prefix`, `backupcore.StoragePrefix` / `FormatBackupBlobName`
+
+| Condição | Resultado | Fonte | Status |
+| --- | --- | --- | --- |
+| `POST /api/servers` cria servidor | `blob_prefix = Slugify(name)` gravado no INSERT; nunca recalculado depois | `repository/servers.go` `Create`, `handlers/servers.go` | ⚠ inferida |
+| `PUT /api/servers/{id}` altera `name` | Display name muda; `blob_prefix` **não** é atualizado; uploads e sweep continuam no prefixo antigo | `ServerRepo.Update` omite `blob_prefix` | ⚠ inferida |
+| Upload / retenção (HTTP ou worker) | Prefixo = `StoragePrefix(server)` → `blob_prefix` se setado, senão fallback `Slugify(name)` | `backupcore.StoragePrefix`, `FormatBackupBlobName` | ⚠ inferida |
+| Nome do objeto de backup | `{prefix}/{slug(dbName)}_{YYYYMMDDTHHMMSSZ}.dump` (UTC compacto) — HTTP e scheduler iguais | `backupcore.FormatBackupBlobName` | ⚠ inferida |
+
+- **Motivo da regra:** rename de servidor não deve orphanar blobs nem impedir a retenção GFS de encontrar o inventário.
+- **Limitação:** servidores renomeados **antes** da migração 000008 recebem backfill com slug do nome **atual** — blobs sob slug antigo continuam órfãos (mitigação futura: ferramenta ops).
+
 ---
 
 ## Regras por objeto / entidade
@@ -627,7 +661,7 @@ Papel único detectado: `admin` — sistema de operador único, sem múltiplos p
 | Item         | Regra                                                                                                                  |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | Documentos   | CPF: validado por dígito verificador (`internal/cpf`)                                                                  |
-| Nome de blob | `<slug(nome-do-servidor)>/<dbname>_<RFC3339>.dump` — `slugify` trata como fronteira de segurança contra path traversal |
+| Nome de blob | `{blob_prefix}/{slug(dbName)}_{UTCcompact}.dump` — `blob_prefix` imutável (RN-BACKUP-034); `Slugify` é fronteira de segurança |
 | Fuso horário | America/Sao_Paulo — fixo no código via `time.LoadLocation`, não negociável; ambiente também configura `ENV TZ=America/Sao_Paulo` para consistência (RN-BACKUP-032) |
 | Paginação    | `a definir` — não confirmado nesta tarefa (ver `docs/API.md`)                                                          |
 
@@ -637,7 +671,9 @@ Papel único detectado: `admin` — sistema de operador único, sem múltiplos p
 
 | Regra                                       | Implementada em                                                                                                                    | Teste que cobre                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Verificada em |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- |
-| RN-BACKUP-003                               | `backend/internal/retention/retention.go`                                                                                          | `backend/internal/retention/*_test.go` (existência não confirmada nesta tarefa — ver `docs/Progresso.md`)                                                                                                                                                                                                                                                                                                                                                                                  | 2026-09-15    |
+| RN-BACKUP-003                               | `backend/internal/retention/retention.go`, `backupcore/sweep.go`                                                                   | `backend/internal/retention/*_test.go`; `backupcore/sweep_test.go` (`TestSweepRetention_EmptyBackupRunIDPassesNilToAudit`)                                                                                                                                                                                                                                                                                                                                                                  | 2026-10-05    |
+| RN-BACKUP-033                               | `handlers/retention_sweep.go`, `repository/retention_sweep_requests.go`, `scheduler/scheduler.go` (`runGlobalSweep`)               | `backupcore/sweep_test.go`; claim atômico coberto pela query CTE (integração dependente de Postgres)                                                                                                                                                                                                                                                                                                                                                                                        | 2026-10-05    |
+| RN-BACKUP-034                               | `domain.Server.BlobPrefix`, `repository/servers.go`, `backupcore/blobname.go`, migração `000008`                                   | `backupcore/blobname_test.go` (`TestStoragePrefix`, `TestFormatBackupBlobName`); `TestSweepRetention_FailedDeleteTracksDeleteBlobErrors`                                                                                                                                                                                                                                                                                                                                                   | 2026-10-05    |
 | RN-BACKUP-005, RN-BACKUP-013                | `backend/internal/httpapi/handlers/server_ssh.go`                                                                                  | `a definir`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-09-15    |
 | RN-BACKUP-008                               | `backend/internal/scheduler/executor.go`                                                                                           | `a definir`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-09-15    |
 | RN-BACKUP-015                               | `backend/internal/sshclient/sshclient.go`                                                                                          | `a definir`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-09-15    |
@@ -694,3 +730,5 @@ Regra `confirmada` sem teste é dívida técnica — registrar em `docs/Progress
 | 2026-09-16 | RN-BACKUP-029 (caso não previsto resolvido), RN-BACKUP-030 (criada, confirmada)                     | atualizada/criada    | Editar `cronExpression` de um servidor já agendado via `PUT /api/servers/{id}` agora recalcula `next_run_at` imediatamente (não espera mais o próximo `claimAndEnqueue`); recálculo restrito a servidores já agendados, deixando o bootstrap da primeira vez (RN-BACKUP-029) intocado | `.claude/plans/fa-a-a-analise-e-nested-llama.md` |
 | 2026-09-16 | RN-BACKUP-031 (criada, ⚠ inferida)                                                                   | criada               | Dashboard: gráfico de tamanho/duração por execução substituído por 4 gráficos de barras empilhadas por destino (contagem e soma de bytes, últimos 30 dias diário + ano corrente mensal). Novo endpoint `GET /api/dashboard/backup-stats`. Destino resolvido via JOIN com `servers.storage_target_id` atual, sem nova migration (decisão do usuário). Corrigido durante a implementação: bug de timezone no `date_trunc` da nova query (truncava no fuso da sessão do Postgres, não em UTC) | `.claude/plans/Backapeando-2026-09-16-15-23-dashboard-graficos-por-destino.md` |
 | 2026-09-28 | RN-BACKUP-003 (atualizada: ⚠ inferida → confirmada); RN-BACKUP-004 (status a definir mantido)        | atualizada           | Corrigido bug crítico de RN-BACKUP-003: algoritmo `Decide` não marcava `monthsSeen` ao aceitar blobs via `RecentCount`, causando double-count do mês (ex.: 4 backups em setembro mantinha 4 em vez de 3 com RecentCount=3). Implementado `Sweep` resiliente (continua em erro de delete, agrega erros, permite limpeza parcial). Adicionado `ProbeDelete` em todos os backends de storage (Azure, S3, Filesystem) para testar permissão de delete durante "test-connection", evitando credenciais mal-escopadas quebrarem expurgo silenciosamente em produção. Melhorada observabilidade: log ERROR com mensagem clara de falha de sweep no scheduler, e campos `error`/`failedDelete` na resposta de `/backup-now` | `.claude/plans/preciso-verificar-que-quando-abstract-flask.md` |
+| 2026-10-05 | RN-BACKUP-033 (criada, ⚠ inferida); RN-BACKUP-003 rastreabilidade atualizada                         | criada/atualizada    | Expurgo global: claim atômico `pending→running`; audit com `backup_run_id` NULL (não `''`); summary `totalBlobsDeleted` preenchido; reason distinto pós-backup vs global. 404 do botão em Settings continua sendo diagnóstico de deploy (ver Infraestrutura) | `.cursor/plans/analise_retencao_expurgo_24ceed02.plan.md` |
+| 2026-10-05 | RN-BACKUP-034 (criada, ⚠ inferida); naming e failedDelete                                            | criada               | `servers.blob_prefix` imutável; naming canônico HTTP=worker; `retention.failedDelete` efetivo em `/backup-now` | `.cursor/plans/pendencias_retencao_blobs_6f472632.plan.md` |

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"backapeando-backup-manager/internal/backupcore"
 	"backapeando-backup-manager/internal/crypto"
 	"backapeando-backup-manager/internal/domain"
 	"backapeando-backup-manager/internal/storage"
@@ -134,29 +135,7 @@ func (m *mockRepositories) RetentionDeletions() *mockRetentionDeletionRepo {
 // httpapi/handlers/backup.go) — see backupcore/redact_test.go for their
 // tests.
 
-func TestSlugify_Basic(t *testing.T) {
-	tests := []struct {
-		input  string
-		expect string
-	}{
-		{"my-server", "my-server"},
-		{"My Server", "my-server"},
-		{"My__Server", "my-server"},
-		{"server123", "server123"},
-		{"!!!server!!!", "server"},
-		{"", "server"},
-		{"---", "server"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			got := slugify(tc.input)
-			if got != tc.expect {
-				t.Errorf("slugify(%q) = %q, want %q", tc.input, got, tc.expect)
-			}
-		})
-	}
-}
+// Slugify tests live in backupcore/blobname_test.go (shared helper).
 
 func TestExecuteBackup_Success(t *testing.T) {
 	// Note: full integration test of ExecuteBackup requires actual SSH and Azure connections,
@@ -177,10 +156,10 @@ func TestExecuteBackup_Success(t *testing.T) {
 		t.Errorf("pg_dump command not generated: %q", cmd)
 	}
 
-	// Verify that slugify works
-	slug := slugify("my-server")
+	// Verify that shared slugify still produces a path-safe prefix
+	slug := backupcore.Slugify("my-server")
 	if slug != "my-server" {
-		t.Errorf("slugify() = %q, want %q", slug, "my-server")
+		t.Errorf("Slugify() = %q, want %q", slug, "my-server")
 	}
 }
 
@@ -214,7 +193,7 @@ func TestExecuteBackup_RetentionReadError(t *testing.T) {
 }
 
 func TestSlugify_SecurityBoundary(t *testing.T) {
-	// Verify that slugify cannot produce "..", leading "/", or embedded "/"
+	// Verify that Slugify cannot produce "..", leading "/", or embedded "/"
 	// that would allow path traversal in blob names
 
 	dangerous := []string{
@@ -225,12 +204,12 @@ func TestSlugify_SecurityBoundary(t *testing.T) {
 	}
 
 	for _, name := range dangerous {
-		slug := slugify(name)
+		slug := backupcore.Slugify(name)
 		if strings.Contains(slug, "/") || strings.Contains(slug, "\\") || strings.HasPrefix(slug, ".") {
-			t.Errorf("slugify(%q) = %q is not safe (contains path separators or leading dot)", name, slug)
+			t.Errorf("Slugify(%q) = %q is not safe (contains path separators or leading dot)", name, slug)
 		}
 		if slug == "" {
-			t.Errorf("slugify(%q) returned empty string", name)
+			t.Errorf("Slugify(%q) returned empty string", name)
 		}
 	}
 }
