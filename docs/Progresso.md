@@ -96,5 +96,20 @@ Todas as regras abaixo estão `⚠ inferida` em `docs/RegrasNegocio.md`, aguarda
 | 2026-09-28 | Follow-up — `docker stack deploy`/`--force` não corrigiu o incidente mesmo após redeploy manual; migração para tags de versão fixa | Usuário confirmou, com log de produção, que `POST /api/retention-sweep` continuava 404 mesmo após forçar redeploy — indicando que o workaround documentado horas antes (reexecutar `docker stack deploy`/`--force`) não é suficiente sozinho, pois o Swarm pode reutilizar um digest de imagem já resolvido/cacheado mesmo com `-force`. **Correção definitiva:** `docker-stack.yml` migrado de `-latest` para tags de versão fixa (`v1.0.6`); `build-images.sh` agora reescreve essas 3 linhas automaticamente a cada build bem-sucedido (mesmo commit do bump de `prod-version`), eliminando a ambiguidade — o texto do compose sempre muda a cada release, forçando o Swarm a detectar e aplicar o redeploy. Decisão tomada com o usuário via AskUserQuestion, depois de confirmado que o problema recorreu mesmo após o fix anterior. | Infraestrutura.md (procedimento de deploy reescrito + histórico), Memoria.md (aprendizado sobre `--force` não garantir repull), Progresso.md (esta linha) |
 | 2026-10-05 | Diagnóstico + correção retenção/expurgo (404 Settings + bugs do sweep global) | **404:** path código OK; causa ops = binário API antigo (checklist em Infraestrutura). **Código:** `SweepRetention` passa `nil` se `backupRunID` vazio; claim atômico `pending→running`; `totalBlobsDeleted` real; reason audit global vs pós-backup; `AGENTS.md` criado. Testes `backupcore/sweep_test.go` + suite 185 ok. Pendências: `failedDelete` não preenchido; orphans por rename; naming HTTP/scheduler. **Ops:** rodar `./build-images.sh` + `docker stack deploy` para publicar os fixes. | RegrasNegocio (RN-BACKUP-033), API, Infraestrutura, Memoria, Progresso, AGENTS.md |
 | 2026-10-05 | Pendências retenção: failedDelete, blob_prefix, naming unificado | `SweepResult.FailedDelete` wired em `/backup-now`; migração `000008` + backfill; `backupcore.Slugify`/`FormatBackupBlobName`/`StoragePrefix`; HTTP e worker geram o mesmo padrão de blob. RN-BACKUP-034. | RegrasNegocio, API, Arquitetura, Infraestrutura, Memoria, Progresso, AGENTS, types.ts |
+| 2026-10-05 | Eliminar 404 retention-sweep: volume `/app` + hardening | Causa raiz: volumes Swarm `backup_api_app`/`backup_worker_app` sobre `/app`. Removidos do `docker-stack.yml`. Testes `router_routes_test.go` (health+version, POST→401). Settings 404 com mensagem de deploy. **Probe ao fechar:** `GET /api/health` → `version=v1.0.7`; `POST /api/retention-sweep` sem CSRF → **403** (rota existe; nunca 404). **Ops restante no host Swarm:** `docker stack deploy -c docker-stack.yml backapeando` (aplica remoção dos mounts) → `inspect Mounts` → `docker volume rm` órfãos. | Infraestrutura, Frontend, Memoria, Progresso |
 
-Ver tabela de estado **real** de documentação em `docs/RegrasNegocio.md` seção **Histórico** (entrada de 2026-10-05 / RN-BACKUP-034).
+### Sincronização desta tarefa (estado real)
+
+| Documento | Estado | Motivo |
+| --- | --- | --- |
+| `docs/RegrasNegocio.md` | sem alteração | comportamento de negócio inalterado |
+| `docs/Arquitetura.md` | sem alteração | sem mudança de camada/módulo |
+| `docs/Organograma.md` | sem alteração | diagrama ok |
+| `docs/Infraestrutura.md` | atualizado | proibir volume `/app`; checklist redeploy+volume rm |
+| `docs/API.md` | sem alteração | contratos iguais |
+| `docs/Frontend.md` | atualizado | mensagem 404 Settings |
+| `docs/Auth.md` | sem alteração | — |
+| `docs/RAG.md` | sem alteração | — |
+| `docs/Progresso.md` | atualizado | sempre |
+| `docs/Memoria.md` | atualizado | armadilha volume `/app` |
+| `docs/Harness.md` | sem alteração | — |

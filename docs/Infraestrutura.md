@@ -230,26 +230,63 @@ Docker Swarm **não suporta** a sintaxe longa de `depends_on` com `condition:` (
    - `api` e `worker` podem fazer crash-loop por ~10-50s enquanto Postgres/Redis inicializam
    - `web` sobe normalmente mas requests falham com 5xx até `api` estar healthy
 
+### Nunca montar volume sobre `/app` (api/worker)
+
+`api` e `worker` são **stateless** (estado em Postgres/Redis). O binário fica em `/app/api` (ou `/app/worker`) na imagem. Um volume nomeado montado em `/app` **substitui** o filesystem da imagem pelo conteúdo persistido do volume (criado na primeira execução) — o Swarm mostra a tag nova (`backend-v1.0.7`) mas o processo continua sendo o binário antigo do volume.
+
+**Proibido** em `docker-stack.yml` (e equivalentes):
+
+```yaml
+# ERRADO — sombreia o binário da imagem
+volumes:
+  - backup_api_app:/app
+  - backup_worker_app:/app
+```
+
+Sintomas clássicos dessa armadilha:
+
+- `GET /api/health` → `{"status":"ok"}` **sem** campo `version` (código atual sempre emite `version`)
+- `POST /api/retention-sweep` → **404** apesar da tag da imagem incluir a rota
+- `docker service update --force` / trocar tag **não** corrige enquanto o mount existir
+
 ### Checklist — `POST /api/retention-sweep` retorna 404
 
-Sintoma clássico de **binário de API antigo** (a rota existe no código desde v1.0.5+; o frontend pode já mostrar o botão “Rodar expurgo agora” enquanto a API no Swarm ainda é anterior). Não é mismatch de path Nginx/Traefik se outras rotas `/api/*` funcionam.
+Sintoma clássico de **binário efetivo antigo** (a rota existe no código desde v1.0.5+; o frontend pode já mostrar o botão “Rodar expurgo agora” enquanto o processo no Swarm ainda é anterior). Não é mismatch de path Nginx/Traefik se outras rotas `/api/*` funcionam. Causa raiz mais comum após tags fixas: **volume em `/app`** (acima).
 
 1. Conferir versão efetiva:
    ```bash
    curl -sS https://<APP_DOMAIN>/api/health
    ```
-   - Sem campo `version`, ou versão &lt; a esperada em `prod-version` / `docker-stack.yml` → binário desatualizado.
-2. Garantir imagens publicadas (`./build-images.sh`) e redeploy:
+   - Sem campo `version`, ou versão &lt; a esperada em `prod-version` / `docker-stack.yml` → binário desatualizado (imagem ou volume sombreando `/app`).
+2. Confirmar que o serviço **não** monta `/app`:
+   ```bash
+   docker service inspect backapeando_api --format '{{json .Spec.TaskTemplate.ContainerSpec.Mounts}}'
+   docker service inspect backapeando_worker --format '{{json .Spec.TaskTemplate.ContainerSpec.Mounts}}'
+   ```
+   Esperado: `null` ou `[]` (sem mount em `/app`).
+3. Redeploy do stack corrigido (sem volumes `/app`) e remover volumes órfãos **depois** das tasks novas estarem Running:
    ```bash
    docker stack deploy -c docker-stack.yml backapeando
+   # aguardar tasks Running sem mount /app
+   docker volume rm backapeando_backup_api_app backapeando_backup_worker_app
    ```
-3. Se a versão do health ainda não mudar, forçar com registry auth:
+   Nomes reais: `docker volume ls | grep backup_.*_app`.
+4. Se a versão do health ainda não mudar (e mounts já estão limpos), forçar com registry auth:
    ```bash
    docker service update --force --with-registry-auth backapeando_api
    docker service update --force --with-registry-auth backapeando_worker
    docker service update --force --with-registry-auth backapeando_web
    ```
-4. Revalidar: health com a versão nova; `POST /api/retention-sweep` → **202** (não 404); worker processa (`GET /api/retention-sweep/latest`).
+5. Revalidar:
+   ```bash
+   curl -sS https://<APP_DOMAIN>/api/health
+   # obrigatório: {"status":"ok","version":"vX.Y.Z"}
+   curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+     https://<APP_DOMAIN>/api/retention-sweep \
+     -H 'Content-Type: application/json' -d '{}'
+   # sem CSRF → 403; com CSRF e sem sessão → 401. Ambos = rota existe. Nunca 404.
+   ```
+   Com sessão + CSRF: `POST` → **202**; worker processa (`GET /api/retention-sweep/latest`).
 
 ### Rollback
 
@@ -333,3 +370,4 @@ Não coberto neste repositório para produção — o serviço já está declara
 | 2026-09-28 | `docker-stack.yml` migrado de tags `-latest` para tags de versão fixa (`backend-v1.0.6`, `worker-v1.0.6`, `frontend-v1.0.6`); `build-images.sh` passa a reescrever essas 3 linhas automaticamente a cada execução bem-sucedida (mesmo commit que bumpa `prod-version`), garantindo que o compose sempre reflita a versão recém-publicada | prod, ci/cd | `--force`/`docker stack deploy` com tag `-latest` inalterada no texto do compose **não corrigiu** o incidente do mesmo dia (401/404 persistindo mesmo após redeploy forçado) — decisão do usuário, após confirmar que o workaround documentado horas antes não foi suficiente, de eliminar a ambiguidade de vez fixando a versão exata no compose | `.claude/plans/preciso-verificar-que-quando-abstract-flask.md` |
 | 2026-10-05 | Checklist operacional “404 em `POST /api/retention-sweep` → verificar `/api/health`” adicionado ao procedimento de deploy | prod | Reincidência do sintoma (Settings → Rodar expurgo → 404); causa raiz continua sendo binário antigo no Swarm, não bug de rota no código | `.cursor/plans/analise_retencao_expurgo_24ceed02.plan.md` |
 | 2026-10-05 | Migração `000008_servers_blob_prefix` + backfill idempotente em `cmd/api` e `cmd/worker` após `db.Migrate` | prod, dev | RN-BACKUP-034: prefixo de storage imutável no rename; Slugify aplicado em Go (não SQL) | `.cursor/plans/pendencias_retencao_blobs_6f472632.plan.md` |
+| 2026-10-05 | Removidos volumes `backup_api_app:/app` e `backup_worker_app:/app` de `docker-stack.yml`; checklist 404 atualizado (inspect Mounts + `docker volume rm` órfãos); seção “Nunca montar volume sobre `/app`” | prod | Causa raiz do 404 com tag v1.0.7: volume nomeado sombreava `/app` e mantinha binário antigo (health sem `version`) | `.cursor/plans/fix_retention-sweep_404_deploy_42b89a6e.plan.md` |

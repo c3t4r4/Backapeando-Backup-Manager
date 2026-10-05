@@ -1,5 +1,7 @@
 <template>
-  <nav class="bg-gray-800 text-white w-64 p-4 overflow-y-auto flex flex-col h-screen">
+  <nav
+    class="bg-gray-800 text-white w-64 p-4 overflow-y-auto flex flex-col h-screen"
+  >
     <ul class="space-y-2">
       <li v-for="item in items" :key="item.href">
         <router-link
@@ -12,8 +14,10 @@
       </li>
     </ul>
     <div class="mt-auto pt-4 border-t border-gray-700 text-sm text-gray-400">
-      <p v-if="version" :data-testid="'version-display'">v{{ version }}</p>
-      <p v-else class="text-xs text-gray-500">version unavailable</p>
+      <p v-if="version" :data-testid="'version-display'">
+        Versão: {{ version }}
+      </p>
+      <p v-else class="text-xs text-gray-500">Versão: indisponível</p>
     </div>
   </nav>
 </template>

@@ -155,7 +155,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import axios from 'axios'
 import * as api from '@/api'
+import { apiErrorMessage, logApiError } from '@/lib/apiError'
 import LoadingSpinner from '@/components/LoadingSpinner.vue'
 
 const recentCount = ref(3)
@@ -229,15 +231,27 @@ async function triggerSweep(): Promise<void> {
     // Start polling
     pollSweepStatus()
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : 'erro desconhecido'
-    console.error('[DEBUG] API Error triggering sweep:', err)
+    logApiError('triggerSweep', err)
     sweepStatus.value = {
       status: 'failed',
-      error: `Erro ao iniciar expurgo: ${errorMsg}`,
+      error: retentionSweepErrorMessage(err),
     }
   } finally {
     sweepLoading.value = false
   }
+}
+
+/** 404 = API/binário desatualizado (rota existe desde v1.0.5+); ver Infraestrutura. */
+function retentionSweepErrorMessage(err: unknown): string {
+  if (axios.isAxiosError(err) && err.response?.status === 404) {
+    return (
+      'API desatualizada: POST /api/retention-sweep não existe neste binário (404). ' +
+      'Confira GET /api/health — deve incluir "version". Se faltar version ou for antiga, ' +
+      'verifique se o serviço api/worker não monta volume em /app (sombreia o binário da imagem) ' +
+      'e rode docker stack deploy -c docker-stack.yml backapeando.'
+    )
+  }
+  return `Erro ao iniciar expurgo: ${apiErrorMessage(err, 'erro desconhecido')}`
 }
 
 async function pollSweepStatus(): Promise<void> {

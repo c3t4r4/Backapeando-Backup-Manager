@@ -16,6 +16,8 @@ import type { RetentionPolicyDTO } from '@/api'
 vi.mock('@/api', () => ({
   getDefaultRetentionPolicy: vi.fn(),
   putDefaultRetentionPolicy: vi.fn(),
+  postRetentionSweep: vi.fn(),
+  getLatestRetentionSweep: vi.fn(),
 }))
 
 describe('SettingsView', () => {
@@ -129,5 +131,25 @@ describe('SettingsView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(true)
+  })
+
+  it('should show deploy guidance when retention sweep returns 404', async () => {
+    const api = await import('@/api')
+    vi.mocked(api.getDefaultRetentionPolicy).mockResolvedValue(mockPolicy)
+    vi.mocked(api.postRetentionSweep).mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 404',
+      response: { status: 404, data: {} },
+    })
+
+    const wrapper = mount(SettingsView)
+    await flushPromises()
+
+    await wrapper.find('[data-testid="sweep-button"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('API desatualizada')
+    expect(wrapper.text()).toContain('/api/health')
+    expect(wrapper.text()).toContain('/app')
   })
 })
