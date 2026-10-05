@@ -116,25 +116,25 @@ const (
 // SSHPrivateKeyEncrypted and DBPasswordEncrypted are never serialized back
 // to API responses.
 type Server struct {
-	ID                      string
-	Name                    string
-	Host                    string
-	Port                    int
-	SSHUser                 string
-	DBEngine                DBEngine
-	DeploymentMode          DeploymentMode
-	ContainerName           *string // required iff DeploymentMode == DeploymentModeDocker
-	DBName                  string
-	DBUser                  string
-	DBPasswordEncrypted     []byte // nullable; required iff DBEngine != DBEnginePostgres
-	PgDumpExtraArgs         string
-	MySQLDumpExtraArgs      string
-	SqlCmdExtraArgs         string
-	SSHPrivateKeyEncrypted  []byte
-	SSHPublicKey            *string
-	SSHKeyFingerprint       *string
-	SSHHostKeyFingerprint   *string
-	StorageTargetID         *string
+	ID                     string
+	Name                   string
+	Host                   string
+	Port                   int
+	SSHUser                string
+	DBEngine               DBEngine
+	DeploymentMode         DeploymentMode
+	ContainerName          *string // required iff DeploymentMode == DeploymentModeDocker
+	DBName                 string
+	DBUser                 string
+	DBPasswordEncrypted    []byte // nullable; required iff DBEngine != DBEnginePostgres
+	PgDumpExtraArgs        string
+	MySQLDumpExtraArgs     string
+	SqlCmdExtraArgs        string
+	SSHPrivateKeyEncrypted []byte
+	SSHPublicKey           *string
+	SSHKeyFingerprint      *string
+	SSHHostKeyFingerprint  *string
+	StorageTargetID        *string
 	// BlobPrefix is the immutable storage folder for this server's dumps
 	// (RN-BACKUP-034). Set once at create; never updated when Name changes.
 	BlobPrefix              string
@@ -174,6 +174,18 @@ type BackupRun struct {
 	ErrorMessage     *string
 	LogOutput        *string
 	CreatedAt        time.Time
+	// ArtifactPurged is set only by history list queries: true when the
+	// blob was recorded in retention_deletions, false when a success run
+	// still has its blob, nil when there is no blob to judge (failed/
+	// queued/running or missing blob_name).
+	ArtifactPurged *bool
+}
+
+// RetainedBackupStats is the count and byte sum of success runs whose
+// blob has not been recorded as deleted by retention_deletions.
+type RetainedBackupStats struct {
+	Count int
+	Bytes int64
 }
 
 // BackupRunDestinationBucket is one row of a time-bucketed (day or month),

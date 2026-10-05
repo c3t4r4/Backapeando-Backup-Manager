@@ -97,19 +97,20 @@ Todas as regras abaixo estão `⚠ inferida` em `docs/RegrasNegocio.md`, aguarda
 | 2026-10-05 | Diagnóstico + correção retenção/expurgo (404 Settings + bugs do sweep global) | **404:** path código OK; causa ops = binário API antigo (checklist em Infraestrutura). **Código:** `SweepRetention` passa `nil` se `backupRunID` vazio; claim atômico `pending→running`; `totalBlobsDeleted` real; reason audit global vs pós-backup; `AGENTS.md` criado. Testes `backupcore/sweep_test.go` + suite 185 ok. Pendências: `failedDelete` não preenchido; orphans por rename; naming HTTP/scheduler. **Ops:** rodar `./build-images.sh` + `docker stack deploy` para publicar os fixes. | RegrasNegocio (RN-BACKUP-033), API, Infraestrutura, Memoria, Progresso, AGENTS.md |
 | 2026-10-05 | Pendências retenção: failedDelete, blob_prefix, naming unificado | `SweepResult.FailedDelete` wired em `/backup-now`; migração `000008` + backfill; `backupcore.Slugify`/`FormatBackupBlobName`/`StoragePrefix`; HTTP e worker geram o mesmo padrão de blob. RN-BACKUP-034. | RegrasNegocio, API, Arquitetura, Infraestrutura, Memoria, Progresso, AGENTS, types.ts |
 | 2026-10-05 | Eliminar 404 retention-sweep: volume `/app` + hardening | Causa raiz: volumes Swarm `backup_api_app`/`backup_worker_app` sobre `/app`. Removidos do `docker-stack.yml`. Testes `router_routes_test.go` (health+version, POST→401). Settings 404 com mensagem de deploy. **Probe ao fechar:** `GET /api/health` → `version=v1.0.7`; `POST /api/retention-sweep` sem CSRF → **403** (rota existe; nunca 404). **Ops restante no host Swarm:** `docker stack deploy -c docker-stack.yml backapeando` (aplica remoção dos mounts) → `inspect Mounts` → `docker volume rm` órfãos. | Infraestrutura, Frontend, Memoria, Progresso |
+| 2026-10-05 | pg_dump host default + stats retidos na grid + artefato no histórico | `-h localhost` injetado em modo host (skip se extras já têm `-h`); `GET /api/servers` com `retainedBackupCount`/`Bytes`; histórico com `artifactPurged` via `retention_deletions` por blob_name. RN-BACKUP-035/036/037. | RegrasNegocio, API, Frontend, Memoria, Progresso |
 
 ### Sincronização desta tarefa (estado real)
 
 | Documento | Estado | Motivo |
 | --- | --- | --- |
-| `docs/RegrasNegocio.md` | sem alteração | comportamento de negócio inalterado |
+| `docs/RegrasNegocio.md` | atualizado | RN-BACKUP-035/036/037 |
 | `docs/Arquitetura.md` | sem alteração | sem mudança de camada/módulo |
-| `docs/Organograma.md` | sem alteração | diagrama ok |
-| `docs/Infraestrutura.md` | atualizado | proibir volume `/app`; checklist redeploy+volume rm |
-| `docs/API.md` | sem alteração | contratos iguais |
-| `docs/Frontend.md` | atualizado | mensagem 404 Settings |
+| `docs/Organograma.md` | sem alteração | fluxo de negócio inalterado |
+| `docs/Infraestrutura.md` | sem alteração | sem Docker/deploy |
+| `docs/API.md` | atualizado | campos list servers + artifactPurged |
+| `docs/Frontend.md` | atualizado | colunas T-03/T-06 + hint host |
 | `docs/Auth.md` | sem alteração | — |
 | `docs/RAG.md` | sem alteração | — |
 | `docs/Progresso.md` | atualizado | sempre |
-| `docs/Memoria.md` | atualizado | armadilha volume `/app` |
+| `docs/Memoria.md` | atualizado | match de expurgo por blob_name |
 | `docs/Harness.md` | sem alteração | — |

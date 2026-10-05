@@ -47,6 +47,7 @@ type backupRunDTO struct {
 	UploadDurationMS *int       `json:"uploadDurationMs,omitempty"`
 	ErrorMessage     *string    `json:"errorMessage,omitempty"`
 	LogOutput        *string    `json:"logOutput,omitempty"`
+	ArtifactPurged   *bool      `json:"artifactPurged,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
 }
 
@@ -56,7 +57,7 @@ func toBackupRunDTO(b domain.BackupRun) backupRunDTO {
 		StartedAt: b.StartedAt, FinishedAt: b.FinishedAt, BlobName: b.BlobName,
 		BlobSizeBytes: b.BlobSizeBytes, DumpDurationMS: b.DumpDurationMS,
 		UploadDurationMS: b.UploadDurationMS, ErrorMessage: b.ErrorMessage,
-		LogOutput: b.LogOutput, CreatedAt: b.CreatedAt,
+		LogOutput: b.LogOutput, ArtifactPurged: b.ArtifactPurged, CreatedAt: b.CreatedAt,
 	}
 }
 

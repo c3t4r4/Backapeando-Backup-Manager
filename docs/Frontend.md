@@ -80,10 +80,10 @@ Todos os componentes de domínio têm `*.spec.ts` correspondente (Vitest + Vue T
 | --- | --- | --- | --- | --- |
 | `/login` | T-01 | `LoginView.vue` | público | RN-AUTH-001 — ver `docs/RegrasNegocio.md` |
 | `/dashboard` | T-02 | `DashboardView.vue` | admin | RN-BACKUP-002, RN-BACKUP-031 |
-| `/servers` | T-03 | `ServersView.vue` | admin | RN-BACKUP-001, RN-BACKUP-002 |
-| `/servers/new` | T-04 | `ServerNewView.vue` | admin | RN-BACKUP-001, RN-BACKUP-017, RN-BACKUP-018, RN-BACKUP-021 |
-| `/servers/:id/edit` | T-05 | `ServerEditView.vue` | admin | RN-BACKUP-001, RN-BACKUP-005, RN-BACKUP-013, RN-BACKUP-017 a 021, RN-BACKUP-023, RN-BACKUP-024 |
-| `/history` | T-06 | `HistoryView.vue` | admin | RN-BACKUP-014, RN-BACKUP-016, RN-BACKUP-022, RN-BACKUP-025, RN-BACKUP-026, RN-BACKUP-027 |
+| `/servers` | T-03 | `ServersView.vue` | admin | RN-BACKUP-001, RN-BACKUP-002, RN-BACKUP-036 |
+| `/servers/new` | T-04 | `ServerNewView.vue` | admin | RN-BACKUP-001, RN-BACKUP-017, RN-BACKUP-018, RN-BACKUP-021, RN-BACKUP-035 |
+| `/servers/:id/edit` | T-05 | `ServerEditView.vue` | admin | RN-BACKUP-001, RN-BACKUP-005, RN-BACKUP-013, RN-BACKUP-017 a 021, RN-BACKUP-023, RN-BACKUP-024, RN-BACKUP-035 |
+| `/history` | T-06 | `HistoryView.vue` | admin | RN-BACKUP-014, RN-BACKUP-016, RN-BACKUP-022, RN-BACKUP-025, RN-BACKUP-026, RN-BACKUP-027, RN-BACKUP-037 |
 | `/storage-targets` | T-07 | `StorageTargetsView.vue` | admin | RN-STORAGE-001 |
 | `/storage-targets/new` | T-08 | `StorageTargetNewView.vue` | admin | RN-STORAGE-001 |
 | `/storage-targets/:id/edit` | T-09 | `StorageTargetEditView.vue` | admin | RN-STORAGE-001 |
@@ -174,3 +174,4 @@ A lógica de decisão de cada tela é documentada em `docs/RegrasNegocio.md`, n�
 | 2026-09-16 | T-06 (Histórico) | Seleção de servidor deixa de ser obrigatória — tela busca os últimos 50 backups de todos os servidores por padrão (`GET /api/backup-runs`); coluna "Servidor" passa a mostrar o nome em vez do UUID truncado | Usuário reportou que a tela não trazia nada até selecionar um servidor |
 | 2026-09-16 | T-02 (Dashboard) | Gráfico de linha "Tamanho e duração dos backups" (por execução) substituído por 4 gráficos de barras empilhadas por destino (contagem/bytes × 30 dias diário/ano mensal); primeira paleta de cor de gráfico validada e documentada do projeto (skill `dataviz`) | Usuário pediu que o gráfico mostrasse backups e soma de dados por destino, últimos 30 dias e mês a mês do ano atual |
 | 2026-10-05 | T-10 (`SettingsView.vue`) | Em axios 404 no “Rodar expurgo agora”, mensagem aponta API/binário desatualizado, checklist `/api/health` + volume `/app` | Sintoma ops recorrente; UI precisa orientar diagnóstico |
+| 2026-10-05 | T-03 (`ServerList`), T-04/T-05 (hint pg_dump), T-06 (`BackupTable`) | Coluna Backups (count · tamanho retido); hint em modo host sobre `-h localhost` automático; coluna Artefato (Presente/Expurgado/—) | RN-BACKUP-035/036/037 |

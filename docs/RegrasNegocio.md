@@ -3,7 +3,7 @@
 > **Documento de prioridade 3 na ordem de leitura obrigatória.**
 > Memória viva de todas as regras de negócio do sistema, tela por tela, e de todas as regras de tomada de decisão na lógica das páginas e dos objetos.
 
-Última atualização: 2026-10-05 (RN-BACKUP-034 blob_prefix + failedDelete + naming unificado)
+Última atualização: 2026-10-05 (RN-BACKUP-035/036/037 — pg_dump host, stats retidos, artefato no histórico)
 
 ---
 
@@ -74,10 +74,10 @@
 | ---- | ------------------------------- | --------------------------- | ---------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------- | ---------- |
 | T-01 | Login                           | `/login`                    | `frontend/src/views/LoginView.vue`             | público             | RN-AUTH-001, RT-001                                                                      | ⚠ inferida |
 | T-02 | Dashboard                       | `/dashboard`                | `frontend/src/views/DashboardView.vue`         | admin (único papel) | RN-BACKUP-002                                                                            | ⚠ inferida |
-| T-03 | Servidores                      | `/servers`                  | `frontend/src/views/ServersView.vue`           | admin               | RN-BACKUP-001, RN-BACKUP-002                                                             | ⚠ inferida |
-| T-04 | Novo servidor                   | `/servers/new`              | `frontend/src/views/ServerNewView.vue`         | admin               | RN-BACKUP-001                                                                            | ⚠ inferida |
-| T-05 | Editar servidor                 | `/servers/:id/edit`         | `frontend/src/views/ServerEditView.vue`        | admin               | RN-BACKUP-001, RN-BACKUP-005, RN-BACKUP-013, RN-BACKUP-015, RN-BACKUP-023, RN-BACKUP-024, RN-BACKUP-029 | ⚠ inferida |
-| T-06 | Histórico                       | `/history`                  | `frontend/src/views/HistoryView.vue`           | admin               | RN-BACKUP-014, RN-BACKUP-016, RN-BACKUP-022, RN-BACKUP-025, RN-BACKUP-026, RN-BACKUP-027 | ⚠ inferida |
+| T-03 | Servidores                      | `/servers`                  | `frontend/src/views/ServersView.vue`           | admin               | RN-BACKUP-001, RN-BACKUP-002, RN-BACKUP-036                                              | ⚠ inferida |
+| T-04 | Novo servidor                   | `/servers/new`              | `frontend/src/views/ServerNewView.vue`         | admin               | RN-BACKUP-001, RN-BACKUP-035                                                             | ⚠ inferida |
+| T-05 | Editar servidor                 | `/servers/:id/edit`         | `frontend/src/views/ServerEditView.vue`        | admin               | RN-BACKUP-001, RN-BACKUP-005, RN-BACKUP-013, RN-BACKUP-015, RN-BACKUP-023, RN-BACKUP-024, RN-BACKUP-029, RN-BACKUP-035 | ⚠ inferida |
+| T-06 | Histórico                       | `/history`                  | `frontend/src/views/HistoryView.vue`           | admin               | RN-BACKUP-014, RN-BACKUP-016, RN-BACKUP-022, RN-BACKUP-025, RN-BACKUP-026, RN-BACKUP-027, RN-BACKUP-037 | ⚠ inferida |
 | T-07 | Destinos de armazenamento       | `/storage-targets`          | `frontend/src/views/StorageTargetsView.vue`    | admin               | RN-STORAGE-001                                                                           | ⚠ inferida |
 | T-08 | Novo destino de armazenamento   | `/storage-targets/new`      | `frontend/src/views/StorageTargetNewView.vue`  | admin               | RN-STORAGE-001                                                                           | ⚠ inferida |
 | T-09 | Editar destino de armazenamento | `/storage-targets/:id/edit` | `frontend/src/views/StorageTargetEditView.vue` | admin               | RN-STORAGE-001                                                                           | ⚠ inferida |
@@ -558,6 +558,49 @@ Papel único detectado: `admin` — sistema de operador único, sem múltiplos p
 - **Motivo da regra:** rename de servidor não deve orphanar blobs nem impedir a retenção GFS de encontrar o inventário.
 - **Limitação:** servidores renomeados **antes** da migração 000008 recebem backfill com slug do nome **atual** — blobs sob slug antigo continuam órfãos (mitigação futura: ferramenta ops).
 
+### RN-BACKUP-035 — `pg_dump` em modo host injeta `-h localhost`
+
+- **Tela:** T-04 / T-05
+- **Status:** ⚠ inferida
+- **Origem:** código (`buildPgDumpCommand` em `scheduler/dumpcommand.go`; espelho em `frontend/src/lib/dumpCommand.ts`)
+
+| Condição | Resultado | Fonte | Status |
+| --- | --- | --- | --- |
+| `deploymentMode=host` + `dbEngine=postgres` e `PgDumpExtraArgs` **não** contém o token `-h` | comando inclui `-h localhost` após `-Fc` e antes dos extras | `buildPgDumpCommand` | ⚠ inferida |
+| `PgDumpExtraArgs` já contém `-h` (ex. `-h localhost -d` legado) | não reinjeta `-h localhost` | idem | ⚠ inferida |
+| `deploymentMode=docker` | comportamento anterior inalterado (sem `-h`) | idem | ⚠ inferida |
+
+- **Motivo da regra:** em host/instância, `pg_dump` sem `-h localhost` falha; operadores não devem depender de Argumentos extras para o caso padrão.
+
+### RN-BACKUP-036 — Grid de servidores mostra backups ainda retidos
+
+- **Tela:** T-03
+- **Status:** ⚠ inferida
+- **Origem:** código (`BackupRunRepo.RetainedBackupStatsByServer`, `GET /api/servers`, `ServerList.vue`)
+
+| Condição | Resultado | Fonte | Status |
+| --- | --- | --- | --- |
+| `GET /api/servers` | cada item inclui `retainedBackupCount` e `retainedBackupBytes` | `handlers/servers.go` `List` | ⚠ inferida |
+| Contagem | só runs `status=success` com `blob_name` não nulo **sem** linha em `retention_deletions` para o mesmo `(server_id, blob_name)` | `RetainedBackupStatsByServer` | ⚠ inferida |
+| Após expurgo que grava audit | próxima carga da grid reflete count/bytes menores (cálculo em leitura) | idem | ⚠ inferida |
+
+- **Motivo da regra:** o operador precisa ver quantos dumps ainda ocupam storage e o tamanho total, atualizado após retenção.
+
+### RN-BACKUP-037 — Histórico indica se o artefato ainda está no storage
+
+- **Tela:** T-06
+- **Status:** ⚠ inferida
+- **Origem:** código (`List`/`ListAll` com `EXISTS` em `retention_deletions`; `BackupTable.vue` coluna Artefato)
+
+| Condição | Resultado | Fonte | Status |
+| --- | --- | --- | --- |
+| Run `success` com `blob_name` e **sem** match em `retention_deletions` | `artifactPurged=false` → UI "Presente" | `backup_runs.go` list select | ⚠ inferida |
+| Run `success` com `blob_name` e match em `retention_deletions` por `(server_id, blob_name)` | `artifactPurged=true` → UI "Expurgado" | idem | ⚠ inferida |
+| Run sem blob / não-success | `artifactPurged` omitido/`null` → UI "—" | idem | ⚠ inferida |
+
+- **Motivo da regra:** `status` do run é o ciclo de vida da execução; a presença do blob no storage é independente e muda com o expurgo.
+- **Atenção:** `retention_deletions.backup_run_id` é o run que **disparou** o sweep (ou NULL no global) — **não** usar para decidir se o artefato deste run foi expurgado.
+
 ---
 
 ## Regras por objeto / entidade
@@ -674,6 +717,9 @@ Papel único detectado: `admin` — sistema de operador único, sem múltiplos p
 | RN-BACKUP-003                               | `backend/internal/retention/retention.go`, `backupcore/sweep.go`                                                                   | `backend/internal/retention/*_test.go`; `backupcore/sweep_test.go` (`TestSweepRetention_EmptyBackupRunIDPassesNilToAudit`)                                                                                                                                                                                                                                                                                                                                                                  | 2026-10-05    |
 | RN-BACKUP-033                               | `handlers/retention_sweep.go`, `repository/retention_sweep_requests.go`, `scheduler/scheduler.go` (`runGlobalSweep`)               | `backupcore/sweep_test.go`; claim atômico coberto pela query CTE (integração dependente de Postgres)                                                                                                                                                                                                                                                                                                                                                                                        | 2026-10-05    |
 | RN-BACKUP-034                               | `domain.Server.BlobPrefix`, `repository/servers.go`, `backupcore/blobname.go`, migração `000008`                                   | `backupcore/blobname_test.go` (`TestStoragePrefix`, `TestFormatBackupBlobName`); `TestSweepRetention_FailedDeleteTracksDeleteBlobErrors`                                                                                                                                                                                                                                                                                                                                                   | 2026-10-05    |
+| RN-BACKUP-035                               | `scheduler/dumpcommand.go` (`buildPgDumpCommand`), `frontend/src/lib/dumpCommand.ts`                                              | `dumpcommand_test.go` (host + skip quando extras já têm `-h`); `dumpCommand.spec.ts`                                                                                                                                                                                                                                                                                                                                                                                                      | 2026-10-05    |
+| RN-BACKUP-036                               | `repository/backup_runs.go` (`RetainedBackupStatsByServer`), `handlers/servers.go` `List`, `ServerList.vue`                      | `TestRetainedBackupStatsAndArtifactPurged`; `ServerList.spec.ts`                                                                                                                                                                                                                                                                                                                                                                                                                          | 2026-10-05    |
+| RN-BACKUP-037                               | `repository/backup_runs.go` (`List`/`ListAll` + `artifact_purged`), `BackupTable.vue`                                              | `TestRetainedBackupStatsAndArtifactPurged`; `BackupTable.spec.ts`                                                                                                                                                                                                                                                                                                                                                                                                                         | 2026-10-05    |
 | RN-BACKUP-005, RN-BACKUP-013                | `backend/internal/httpapi/handlers/server_ssh.go`                                                                                  | `a definir`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-09-15    |
 | RN-BACKUP-008                               | `backend/internal/scheduler/executor.go`                                                                                           | `a definir`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-09-15    |
 | RN-BACKUP-015                               | `backend/internal/sshclient/sshclient.go`                                                                                          | `a definir`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-09-15    |
@@ -732,3 +778,4 @@ Regra `confirmada` sem teste é dívida técnica — registrar em `docs/Progress
 | 2026-09-28 | RN-BACKUP-003 (atualizada: ⚠ inferida → confirmada); RN-BACKUP-004 (status a definir mantido)        | atualizada           | Corrigido bug crítico de RN-BACKUP-003: algoritmo `Decide` não marcava `monthsSeen` ao aceitar blobs via `RecentCount`, causando double-count do mês (ex.: 4 backups em setembro mantinha 4 em vez de 3 com RecentCount=3). Implementado `Sweep` resiliente (continua em erro de delete, agrega erros, permite limpeza parcial). Adicionado `ProbeDelete` em todos os backends de storage (Azure, S3, Filesystem) para testar permissão de delete durante "test-connection", evitando credenciais mal-escopadas quebrarem expurgo silenciosamente em produção. Melhorada observabilidade: log ERROR com mensagem clara de falha de sweep no scheduler, e campos `error`/`failedDelete` na resposta de `/backup-now` | `.claude/plans/preciso-verificar-que-quando-abstract-flask.md` |
 | 2026-10-05 | RN-BACKUP-033 (criada, ⚠ inferida); RN-BACKUP-003 rastreabilidade atualizada                         | criada/atualizada    | Expurgo global: claim atômico `pending→running`; audit com `backup_run_id` NULL (não `''`); summary `totalBlobsDeleted` preenchido; reason distinto pós-backup vs global. 404 do botão em Settings continua sendo diagnóstico de deploy (ver Infraestrutura) | `.cursor/plans/analise_retencao_expurgo_24ceed02.plan.md` |
 | 2026-10-05 | RN-BACKUP-034 (criada, ⚠ inferida); naming e failedDelete                                            | criada               | `servers.blob_prefix` imutável; naming canônico HTTP=worker; `retention.failedDelete` efetivo em `/backup-now` | `.cursor/plans/pendencias_retencao_blobs_6f472632.plan.md` |
+| 2026-10-05 | RN-BACKUP-035, RN-BACKUP-036, RN-BACKUP-037 (criadas, ⚠ inferida)                                    | criada               | Host Postgres injeta `-h localhost`; grid de servidores mostra count/bytes retidos; histórico mostra Presente/Expurgado via `retention_deletions` por blob_name | `host-pgdump-stats-purge_e03765d3.plan.md` |

@@ -215,6 +215,14 @@
           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           data-testid="pg-dump-extra-args-input"
         />
+        <p
+          v-if="deploymentMode === 'host'"
+          class="mt-1 text-xs text-gray-500"
+          data-testid="pg-dump-host-hint"
+        >
+          Em modo host/instância, <code>-h localhost</code> é adicionado
+          automaticamente (não precisa repetir nos extras).
+        </p>
       </div>
       <div v-else-if="dbEngine === 'mysql'" class="mb-4">
         <label

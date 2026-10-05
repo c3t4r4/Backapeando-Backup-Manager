@@ -48,11 +48,25 @@ describe('buildDumpCommandPreview — postgres', () => {
     ])
   })
 
-  it('host mode, no password: no docker prefix', () => {
+  it('host mode, no password: injects -h localhost', () => {
     const preview = buildDumpCommandPreview(
       baseInput({ deploymentMode: 'host' })
     )
-    expect(preview.lines).toEqual(['pg_dump -U app_user -Fc app_db'])
+    expect(preview.lines).toEqual([
+      'pg_dump -U app_user -Fc -h localhost app_db',
+    ])
+  })
+
+  it('host mode skips default -h when extra args already have -h', () => {
+    const preview = buildDumpCommandPreview(
+      baseInput({
+        deploymentMode: 'host',
+        pgDumpExtraArgs: '-h localhost -d',
+      })
+    )
+    expect(preview.lines).toEqual([
+      'pg_dump -U app_user -Fc -h localhost -d app_db',
+    ])
   })
 
   it('docker mode with password: masked, never the real value', () => {

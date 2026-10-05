@@ -164,10 +164,28 @@ describe('BackupTable.vue', () => {
       },
     })
 
-    const headers = ['Servidor', 'Iniciado', 'Concluído', 'Status', 'Tamanho', 'Ações']
+    const headers = ['Servidor', 'Iniciado', 'Concluído', 'Status', 'Tamanho', 'Artefato', 'Ações']
     headers.forEach((header) => {
       expect(wrapper.text()).toContain(header)
     })
+  })
+
+  it('should show artifact Presente / Expurgado / dash', () => {
+    const wrapper = mount(BackupTable, {
+      props: {
+        backups: [
+          { ...mockBackups[0], artifactPurged: false },
+          { ...mockBackups[0], id: 'backup-purged', artifactPurged: true },
+          mockBackups[2],
+        ],
+      },
+    })
+
+    expect(wrapper.find('[data-testid="artifact-backup-1"]').text()).toBe('Presente')
+    expect(wrapper.find('[data-testid="artifact-backup-purged"]').text()).toBe(
+      'Expurgado'
+    )
+    expect(wrapper.find('[data-testid="artifact-backup-3"]').text()).toBe('—')
   })
 
   it('should format server ID to show last 8 chars in uppercase', () => {

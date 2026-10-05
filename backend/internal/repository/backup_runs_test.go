@@ -619,3 +619,103 @@ func TestFailStaleRunning(t *testing.T) {
 		t.Errorf("fresh run status = %s, want running (untouched)", gotFresh.Status)
 	}
 }
+
+// TestRetainedBackupStatsAndArtifactPurged covers the servers-grid retained
+// count/bytes and the history artifactPurged flag: both derive from
+// retention_deletions matched by (server_id, blob_name), not by
+// retention_deletions.backup_run_id (which is the sweep trigger).
+func TestRetainedBackupStatsAndArtifactPurged(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	if err := db.Migrate(dsn); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	ctx := context.Background()
+	pool, err := repository.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	repos := repository.New(pool)
+	containerName := "testcontainer"
+	server, err := repos.Servers.Create(ctx, domain.Server{
+		Name:           "retained-stats-" + uuid.New().String()[:8],
+		Host:           "example.com",
+		Port:           22,
+		SSHUser:        "postgres",
+		DBEngine:       domain.DBEnginePostgres,
+		DeploymentMode: domain.DeploymentModeDocker,
+		ContainerName:  &containerName,
+		DBName:         "testdb",
+		DBUser:         "testuser",
+		CronExpression: "0 3 * * *",
+	})
+	if err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+
+	keepRun, err := repos.BackupRuns.Create(ctx, server.ID)
+	if err != nil {
+		t.Fatalf("create keep run: %v", err)
+	}
+	if err := repos.BackupRuns.MarkSuccess(ctx, keepRun.ID, "keep.dump", 1000, 1, 1); err != nil {
+		t.Fatalf("mark keep success: %v", err)
+	}
+
+	purgedRun, err := repos.BackupRuns.Create(ctx, server.ID)
+	if err != nil {
+		t.Fatalf("create purged run: %v", err)
+	}
+	if err := repos.BackupRuns.MarkSuccess(ctx, purgedRun.ID, "purged.dump", 2000, 1, 1); err != nil {
+		t.Fatalf("mark purged success: %v", err)
+	}
+	if err := repos.RetentionDeletions.Create(ctx, server.ID, nil, "purged.dump", "test"); err != nil {
+		t.Fatalf("create retention deletion: %v", err)
+	}
+
+	failedRun, err := repos.BackupRuns.Create(ctx, server.ID)
+	if err != nil {
+		t.Fatalf("create failed run: %v", err)
+	}
+	if err := repos.BackupRuns.MarkFailed(ctx, failedRun.ID, "boom"); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	stats, err := repos.BackupRuns.RetainedBackupStatsByServer(ctx)
+	if err != nil {
+		t.Fatalf("RetainedBackupStatsByServer: %v", err)
+	}
+	got := stats[server.ID]
+	if got.Count != 1 {
+		t.Errorf("retained count = %d, want 1", got.Count)
+	}
+	if got.Bytes != 1000 {
+		t.Errorf("retained bytes = %d, want 1000", got.Bytes)
+	}
+
+	runs, _, err := repos.BackupRuns.List(ctx, server.ID, nil, 1, 50)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	byID := map[string]domain.BackupRun{}
+	for _, r := range runs {
+		byID[r.ID] = r
+	}
+
+	keep := byID[keepRun.ID]
+	if keep.ArtifactPurged == nil || *keep.ArtifactPurged {
+		t.Errorf("keep ArtifactPurged = %v, want false", keep.ArtifactPurged)
+	}
+	purged := byID[purgedRun.ID]
+	if purged.ArtifactPurged == nil || !*purged.ArtifactPurged {
+		t.Errorf("purged ArtifactPurged = %v, want true", purged.ArtifactPurged)
+	}
+	failed := byID[failedRun.ID]
+	if failed.ArtifactPurged != nil {
+		t.Errorf("failed ArtifactPurged = %v, want nil", failed.ArtifactPurged)
+	}
+}

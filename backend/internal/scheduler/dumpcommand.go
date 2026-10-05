@@ -52,14 +52,22 @@ func BuildDumpPlan(server domain.Server, dbPassword string) (DumpPlan, error) {
 }
 
 // buildPgDumpCommand assembles "pg_dump -U <user> -Fc <extraArgs...>
-// <dbname>". When dbPassword is non-empty, PGPASSWORD (the standard libpq
-// env var) is set for the pg_dump process; when empty, no env var is set at
-// all — this preserves the exact command generated before DB passwords
-// existed, for servers that still rely on trust/peer auth inside the
-// container.
+// <dbname>". In host mode, "-h localhost" is injected after -Fc unless
+// PgDumpExtraArgs already contains "-h" (so operators who already saved
+// "-h localhost -d" keep working without a duplicated flag). Docker mode
+// is unchanged — the process runs inside the container and typically uses
+// the local socket. When dbPassword is non-empty, PGPASSWORD (the standard
+// libpq env var) is set for the pg_dump process; when empty, no env var is
+// set at all — this preserves the exact command generated before DB
+// passwords existed, for servers that still rely on trust/peer auth inside
+// the container.
 func buildPgDumpCommand(server domain.Server, dbPassword string) string {
 	argv := []string{"pg_dump", "-U", server.DBUser, "-Fc"}
-	argv = append(argv, strings.Fields(server.PgDumpExtraArgs)...)
+	extra := strings.Fields(server.PgDumpExtraArgs)
+	if server.DeploymentMode == domain.DeploymentModeHost && !containsToken(extra, "-h") {
+		argv = append(argv, "-h", "localhost")
+	}
+	argv = append(argv, extra...)
 	argv = append(argv, server.DBName)
 
 	env := ""
@@ -67,6 +75,16 @@ func buildPgDumpCommand(server domain.Server, dbPassword string) string {
 		env = "PGPASSWORD=" + dbPassword
 	}
 	return assembleRemoteCommand(server, env, argv)
+}
+
+// containsToken reports whether toks has an exact match for want.
+func containsToken(toks []string, want string) bool {
+	for _, t := range toks {
+		if t == want {
+			return true
+		}
+	}
+	return false
 }
 
 // buildMySQLDumpCommand assembles "mysqldump -u <user> <extraArgs...>

@@ -29,6 +29,11 @@
           <th
             class="border border-gray-300 px-4 py-2 text-left font-semibold text-gray-700"
           >
+            Backups
+          </th>
+          <th
+            class="border border-gray-300 px-4 py-2 text-left font-semibold text-gray-700"
+          >
             Ações
           </th>
         </tr>
@@ -57,6 +62,12 @@
             >
               {{ statusLabel(server.status) }}
             </span>
+          </td>
+          <td
+            class="border border-gray-300 px-4 py-3 text-sm text-gray-600"
+            :data-testid="`retained-backups-${server.id}`"
+          >
+            {{ retainedLabel(server) }}
           </td>
           <td class="border border-gray-300 px-4 py-3">
             <div class="flex gap-2 flex-wrap">
@@ -91,6 +102,7 @@
 
 <script setup lang="ts">
 import type { ServerDTO } from '@/api'
+import { formatSize } from '@/lib/format'
 
 interface Props {
   servers: ServerDTO[]
@@ -116,6 +128,12 @@ function statusLabel(status: string): string {
       ready: 'Pronto',
     }[status] || status
   )
+}
+
+function retainedLabel(server: ServerDTO): string {
+  const count = server.retainedBackupCount ?? 0
+  const bytes = server.retainedBackupBytes ?? 0
+  return `${count} · ${formatSize(bytes)}`
 }
 
 /**

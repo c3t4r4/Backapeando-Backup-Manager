@@ -34,6 +34,11 @@
           <th
             class="border border-gray-300 px-4 py-2 text-left font-semibold text-gray-700"
           >
+            Artefato
+          </th>
+          <th
+            class="border border-gray-300 px-4 py-2 text-left font-semibold text-gray-700"
+          >
             Ações
           </th>
         </tr>
@@ -42,7 +47,7 @@
         <!-- Empty state -->
         <tr v-if="backups.length === 0">
           <td
-            colspan="6"
+            colspan="7"
             class="border border-gray-300 px-4 py-4 text-center text-gray-500"
             data-testid="empty-backups"
           >
@@ -89,6 +94,11 @@
               {{ formatSize(backup.blobSizeBytes) }}
             </span>
           </td>
+          <td class="border border-gray-300 px-4 py-3 text-sm text-gray-600">
+            <span :data-testid="`artifact-${backup.id}`">
+              {{ artifactLabel(backup.artifactPurged) }}
+            </span>
+          </td>
           <td class="border border-gray-300 px-4 py-3">
             <button
               @click="$emit('view-details', backup.id)"
@@ -127,6 +137,12 @@ defineProps<Props>()
 defineEmits<{
   'view-details': [backupId: string]
 }>()
+
+function artifactLabel(artifactPurged: boolean | undefined): string {
+  if (artifactPurged === true) return 'Expurgado'
+  if (artifactPurged === false) return 'Presente'
+  return '—'
+}
 
 /**
  * Get CSS classes for status badge styling

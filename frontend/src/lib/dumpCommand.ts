@@ -85,19 +85,22 @@ function assembleRemoteCommand(
   return parts.join(' ')
 }
 
+/** Mirrors dumpcommand.go's containsToken exactly. */
+function containsToken(toks: string[], want: string): boolean {
+  return toks.includes(want)
+}
+
 /** Mirrors dumpcommand.go's buildPgDumpCommand exactly. */
 function buildPgDumpCommand(
   input: DumpCommandPreviewInput,
   dbPassword: string
 ): string {
-  const argv = [
-    'pg_dump',
-    '-U',
-    input.dbUser,
-    '-Fc',
-    ...fields(input.pgDumpExtraArgs),
-    input.dbName,
-  ]
+  const extra = fields(input.pgDumpExtraArgs)
+  const argv = ['pg_dump', '-U', input.dbUser, '-Fc']
+  if (input.deploymentMode === 'host' && !containsToken(extra, '-h')) {
+    argv.push('-h', 'localhost')
+  }
+  argv.push(...extra, input.dbName)
   const env = dbPassword !== '' ? 'PGPASSWORD=' + dbPassword : ''
   return assembleRemoteCommand(input, env, argv)
 }

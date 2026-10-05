@@ -63,6 +63,10 @@ export interface ServerDTO {
   enabled: boolean
   status: 'pending_key' | 'awaiting_authorization' | 'ready'
   lastTestConnectionError?: string
+  /** Success blobs still present in storage (excludes purged). */
+  retainedBackupCount?: number
+  /** Sum of blob_size_bytes for retained success blobs. */
+  retainedBackupBytes?: number
   createdAt: string
   updatedAt: string
 }
@@ -110,6 +114,11 @@ export interface BackupRunDTO {
   uploadDurationMs?: number
   errorMessage?: string
   logOutput?: string
+  /**
+   * true = blob recorded as purged; false = still in storage;
+   * omitted when there is no blob to judge (non-success / no blobName).
+   */
+  artifactPurged?: boolean
   createdAt: string
 }
 

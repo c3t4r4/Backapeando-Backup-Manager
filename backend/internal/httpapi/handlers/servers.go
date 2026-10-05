@@ -23,6 +23,7 @@ var containerNameRegex = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 type ServerHandlers struct {
 	Servers        *repository.ServerRepo
 	StorageTargets *repository.StorageTargetRepo
+	BackupRuns     *repository.BackupRunRepo
 	Sealer         *crypto.Sealer
 	Logger         *slog.Logger
 }
@@ -57,11 +58,17 @@ type serverDTO struct {
 	LastTestConnectionOK    *bool      `json:"lastTestConnectionOk,omitempty"`
 	LastTestConnectionError *string    `json:"lastTestConnectionError,omitempty"`
 	NextRunAt               *time.Time `json:"nextRunAt,omitempty"`
+	RetainedBackupCount     int        `json:"retainedBackupCount"`
+	RetainedBackupBytes     int64      `json:"retainedBackupBytes"`
 	CreatedAt               time.Time  `json:"createdAt"`
 	UpdatedAt               time.Time  `json:"updatedAt"`
 }
 
 func toServerDTO(s domain.Server) serverDTO {
+	return toServerDTOWithStats(s, domain.RetainedBackupStats{})
+}
+
+func toServerDTOWithStats(s domain.Server, stats domain.RetainedBackupStats) serverDTO {
 	return serverDTO{
 		ID: s.ID, Name: s.Name, Host: s.Host, Port: s.Port, SSHUser: s.SSHUser,
 		DBEngine: string(s.DBEngine), DeploymentMode: string(s.DeploymentMode),
@@ -74,7 +81,10 @@ func toServerDTO(s domain.Server) serverDTO {
 		CronExpression: s.CronExpression, Enabled: s.Enabled, Status: string(s.Status),
 		LastTestConnectionAt: s.LastTestConnectionAt, LastTestConnectionOK: s.LastTestConnectionOK,
 		LastTestConnectionError: s.LastTestConnectionError,
-		NextRunAt:               s.NextRunAt, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt,
+		NextRunAt:               s.NextRunAt,
+		RetainedBackupCount:     stats.Count,
+		RetainedBackupBytes:     stats.Bytes,
+		CreatedAt:               s.CreatedAt, UpdatedAt: s.UpdatedAt,
 	}
 }
 
@@ -165,9 +175,17 @@ func (h *ServerHandlers) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	statsByServer := map[string]domain.RetainedBackupStats{}
+	if h.BackupRuns != nil {
+		statsByServer, err = h.BackupRuns.RetainedBackupStatsByServer(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+	}
 	dtos := make([]serverDTO, 0, len(servers))
 	for _, s := range servers {
-		dtos = append(dtos, toServerDTO(s))
+		dtos = append(dtos, toServerDTOWithStats(s, statsByServer[s.ID]))
 	}
 	writeJSON(w, http.StatusOK, dtos)
 }

@@ -22,12 +22,36 @@ const backupRunColumns = `
 	error_message, log_output, created_at
 `
 
+// backupRunListSelect adds artifact_purged derived from retention_deletions
+// by (server_id, blob_name). backup_run_id on retention_deletions is the
+// sweep trigger, not the owning run — never join on it for this flag.
+const backupRunListSelect = backupRunColumns + `,
+	CASE
+		WHEN blob_name IS NULL OR status <> 'success' THEN NULL
+		ELSE EXISTS (
+			SELECT 1 FROM retention_deletions rd
+			WHERE rd.server_id = backup_runs.server_id
+			  AND rd.blob_name = backup_runs.blob_name
+		)
+	END AS artifact_purged
+`
+
 func scanBackupRun(row pgx.Row) (domain.BackupRun, error) {
 	var b domain.BackupRun
 	err := row.Scan(
 		&b.ID, &b.ServerID, &b.Status, &b.StartedAt, &b.FinishedAt, &b.BlobName,
 		&b.BlobSizeBytes, &b.DumpDurationMS, &b.UploadDurationMS,
 		&b.ErrorMessage, &b.LogOutput, &b.CreatedAt,
+	)
+	return b, err
+}
+
+func scanBackupRunWithArtifact(row pgx.Row) (domain.BackupRun, error) {
+	var b domain.BackupRun
+	err := row.Scan(
+		&b.ID, &b.ServerID, &b.Status, &b.StartedAt, &b.FinishedAt, &b.BlobName,
+		&b.BlobSizeBytes, &b.DumpDurationMS, &b.UploadDurationMS,
+		&b.ErrorMessage, &b.LogOutput, &b.CreatedAt, &b.ArtifactPurged,
 	)
 	return b, err
 }
@@ -146,7 +170,7 @@ func (r *BackupRunRepo) List(ctx context.Context, serverID string, status *strin
 
 	offset := (page - 1) * pageSize
 	rows, err := r.pool.Query(ctx, `
-		SELECT `+backupRunColumns+`
+		SELECT `+backupRunListSelect+`
 		FROM backup_runs
 		WHERE server_id = $1 AND ($2::text IS NULL OR status = $2)
 		ORDER BY created_at DESC
@@ -159,7 +183,7 @@ func (r *BackupRunRepo) List(ctx context.Context, serverID string, status *strin
 
 	var out []domain.BackupRun
 	for rows.Next() {
-		b, err := scanBackupRun(rows)
+		b, err := scanBackupRunWithArtifact(rows)
 		if err != nil {
 			return nil, 0, fmt.Errorf("scan backup run: %w", err)
 		}
@@ -186,7 +210,7 @@ func (r *BackupRunRepo) ListAll(ctx context.Context, serverID *string, status *s
 
 	offset := (page - 1) * pageSize
 	rows, err := r.pool.Query(ctx, `
-		SELECT `+backupRunColumns+`
+		SELECT `+backupRunListSelect+`
 		FROM backup_runs
 		WHERE ($1::uuid IS NULL OR server_id = $1) AND ($2::text IS NULL OR status = $2)
 		ORDER BY created_at DESC
@@ -199,7 +223,7 @@ func (r *BackupRunRepo) ListAll(ctx context.Context, serverID *string, status *s
 
 	var out []domain.BackupRun
 	for rows.Next() {
-		b, err := scanBackupRun(rows)
+		b, err := scanBackupRunWithArtifact(rows)
 		if err != nil {
 			return nil, 0, fmt.Errorf("scan backup run: %w", err)
 		}
@@ -356,6 +380,42 @@ func (r *BackupRunRepo) RecentFailures(ctx context.Context, limit int) ([]domain
 			return nil, fmt.Errorf("scan backup run: %w", err)
 		}
 		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// RetainedBackupStatsByServer returns, for every server that has at least
+// one still-retained success blob, the count and byte sum of those blobs.
+// A blob is retained when no retention_deletions row matches (server_id,
+// blob_name). Servers with zero retained backups are absent from the map.
+func (r *BackupRunRepo) RetainedBackupStatsByServer(ctx context.Context) (map[string]domain.RetainedBackupStats, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT br.server_id,
+		       COUNT(*)::int,
+		       COALESCE(SUM(br.blob_size_bytes), 0)::bigint
+		FROM backup_runs br
+		WHERE br.status = 'success'
+		  AND br.blob_name IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM retention_deletions rd
+			WHERE rd.server_id = br.server_id
+			  AND rd.blob_name = br.blob_name
+		  )
+		GROUP BY br.server_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("retained backup stats by server: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]domain.RetainedBackupStats)
+	for rows.Next() {
+		var serverID string
+		var stats domain.RetainedBackupStats
+		if err := rows.Scan(&serverID, &stats.Count, &stats.Bytes); err != nil {
+			return nil, fmt.Errorf("scan retained backup stats: %w", err)
+		}
+		out[serverID] = stats
 	}
 	return out, rows.Err()
 }

@@ -227,7 +227,39 @@ describe('ServerList', () => {
     expect(headerText).toContain('Host')
     expect(headerText).toContain('Porta')
     expect(headerText).toContain('Status')
+    expect(headerText).toContain('Backups')
     expect(headerText).toContain('Ações')
+  })
+
+  it('should display retained backup count and size', () => {
+    const wrapper = mount(ServerList, {
+      props: {
+        servers: [
+          {
+            ...mockServers[0],
+            retainedBackupCount: 3,
+            retainedBackupBytes: 1048576,
+          },
+        ],
+      },
+    })
+
+    const cell = wrapper.find('[data-testid="retained-backups-1"]')
+    expect(cell.exists()).toBe(true)
+    expect(cell.text()).toContain('3')
+    expect(cell.text()).toContain('1.00 MB')
+  })
+
+  it('should show zero retained backups when stats are absent', () => {
+    const wrapper = mount(ServerList, {
+      props: {
+        servers: [mockServers[0]],
+      },
+    })
+
+    const cell = wrapper.find('[data-testid="retained-backups-1"]')
+    expect(cell.text()).toContain('0')
+    expect(cell.text()).toContain('0.00 B')
   })
 
   it('should log security warning for unknown server status', () => {

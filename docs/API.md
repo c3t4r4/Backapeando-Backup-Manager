@@ -103,9 +103,22 @@ Campos novos na resposta (`serverDTO`):
 | `mysqlDumpExtraArgs`  | `string`   | —                                                                              |
 | `sqlCmdExtraArgs`     | `string`   | —                                                                              |
 
+Em `deploymentMode=host` + `dbEngine=postgres`, o worker injeta `-h localhost` no comando de `pg_dump` quando `pgDumpExtraArgs` ainda não contém o token `-h` (RN-BACKUP-035). Não é campo novo no payload — é comportamento do builder remoto.
+
 `POST /api/servers/{id}/test-connection`: a chave `checks.docker` foi renomeada para `checks.dumpTool` (mesmo breaking change de contrato) — em modo `host` reflete um check de "binário de dump presente no `PATH` do host remoto" em vez de "container Docker rodando". Em modo `docker`, o check agora resolve `containerName` como padrão parcial via `docker ps | grep` (RN-BACKUP-023) em vez de exigir o nome exato.
 
 `containerName` em modo `docker` (`POST`/`PUT /api/servers`): deixou de exigir o nome exato do container — é tratado como padrão parcial e resolvido via `docker ps --format '{{.Names}}' | grep` a cada execução (test-connection, scheduler e `backup-now`). Zero ou múltiplos containers correspondentes é erro explícito (RN-BACKUP-023).
+
+### `GET /api/servers` — stats de backups retidos (RN-BACKUP-036)
+
+Campos aditivos na resposta (`serverDTO`), calculados em leitura a partir de `backup_runs` + `retention_deletions`:
+
+| Campo                  | Tipo     | Observação                                                                 |
+| ---------------------- | -------- | -------------------------------------------------------------------------- |
+| `retainedBackupCount`  | `int`    | Runs `success` cujo `blob_name` ainda não consta em `retention_deletions` |
+| `retainedBackupBytes`  | `int64`  | Soma de `blob_size_bytes` dos mesmos runs (0 se nenhum)                   |
+
+Após um expurgo que grave audit, a próxima listagem já reflete a redução — sem coluna denormalizada.
 
 ### `GET /api/servers/{id}/backup-runs` — paginação e filtro por status (RN-BACKUP-025)
 
@@ -131,6 +144,16 @@ Corpo da resposta:
 ```
 
 `total` reflete o total de registros que casam com o filtro em todas as páginas, não `items.length` — inclusive quando `page` está além da última página existente (nesse caso `items` vem vazio, mas `total` continua o valor real, não `0`).
+
+Cada item de `items` pode incluir `artifactPurged` (RN-BACKUP-037):
+
+| Valor | Significado |
+| --- | --- |
+| `false` | Run `success` com blob ainda não registrado em `retention_deletions` |
+| `true` | Blob correspondente encontrado em `retention_deletions` por `(serverId, blobName)` |
+| omitido | Sem blob a julgar (failed/queued/running ou `blobName` ausente) |
+
+**Não** derivar esse flag de `retention_deletions.backup_run_id` — essa coluna é o trigger do sweep, não o run dono do blob.
 
 ### `GET /api/backup-runs` — histórico combinando todos os servidores (RN-BACKUP-026)
 
@@ -273,3 +296,4 @@ Antes de alterar:
 | 2026-09-28 | `POST /api/servers/{id}/backup-now` resposta | `Retention` ganha campos `error` e `failedDelete`; resposta agora retorna HTTP 200 com sweep error details em vez de `null Retention` quando há problemas de delete | Aditiva (novos campos opcionais `omitempty`; clientes antigos ignoram e continuam funcionando) | Resiliência: Sweep continua em erro de delete (não para no primeiro), e o operador precisa ver o que falhou na limpeza automaticamente — novos campos explicitam erros na resposta (ver `docs/RegrasNegocio.md` RN-BACKUP-003) |
 | 2026-10-05 | `POST /api/retention-sweep`, `GET /api/retention-sweep/latest` | Documentados formalmente; comportamento do worker corrigido (claim atômico, audit com `backup_run_id` NULL, `totalBlobsDeleted` real no summary) | Aditiva (documentação; contrato HTTP inalterado: 202 + poll) | RN-BACKUP-033; reincidência do 404 em produção era deploy, não path |
 | 2026-10-05 | `POST /api/servers/{id}/backup-now` resposta | `retention.failedDelete` passa a ser preenchido com os nomes dos blobs cujo delete falhou | Aditiva (campo já existia no contrato; agora efetivo) | Observabilidade da retenção parcial (RN-BACKUP-003) |
+| 2026-10-05 | `GET /api/servers`; `GET /api/servers/{id}/backup-runs` e `GET /api/backup-runs` | Servers list ganha `retainedBackupCount`/`retainedBackupBytes`; `BackupRunDTO` ganha `artifactPurged`; builder host Postgres injeta `-h localhost` (sem campo novo) | Aditiva | RN-BACKUP-035/036/037 |

@@ -82,7 +82,7 @@ func TestBuildPgDumpCommand_DockerNoPassword(t *testing.T) {
 func TestBuildPgDumpCommand_HostNoPassword(t *testing.T) {
 	server := hostServer(domain.DBEnginePostgres)
 	cmd := buildPgDumpCommand(server, "")
-	want := "pg_dump -U app_user -Fc app_db"
+	want := "pg_dump -U app_user -Fc -h localhost app_db"
 	if cmd != want {
 		t.Errorf("got %q, want %q", cmd, want)
 	}
@@ -103,7 +103,17 @@ func TestBuildPgDumpCommand_DockerWithPassword(t *testing.T) {
 func TestBuildPgDumpCommand_HostWithPassword(t *testing.T) {
 	server := hostServer(domain.DBEnginePostgres)
 	cmd := buildPgDumpCommand(server, "s3cret")
-	want := "PGPASSWORD=s3cret pg_dump -U app_user -Fc app_db"
+	want := "PGPASSWORD=s3cret pg_dump -U app_user -Fc -h localhost app_db"
+	if cmd != want {
+		t.Errorf("got %q, want %q", cmd, want)
+	}
+}
+
+func TestBuildPgDumpCommand_HostSkipsDefaultHostWhenExtraHasDashH(t *testing.T) {
+	server := hostServer(domain.DBEnginePostgres)
+	server.PgDumpExtraArgs = "-h localhost -d"
+	cmd := buildPgDumpCommand(server, "")
+	want := "pg_dump -U app_user -Fc -h localhost -d app_db"
 	if cmd != want {
 		t.Errorf("got %q, want %q", cmd, want)
 	}

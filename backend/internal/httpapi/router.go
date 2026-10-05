@@ -32,7 +32,13 @@ func NewRouter(deps Deps) http.Handler {
 		Users: deps.Repos.AdminUsers, Sessions: deps.Sessions,
 		RateLimiter: deps.RateLimiter, SecureCookies: deps.SecureCookies,
 	}
-	serverHandlers := &handlers.ServerHandlers{Servers: deps.Repos.Servers, StorageTargets: deps.Repos.StorageTargets, Sealer: deps.Sealer, Logger: slog.Default()}
+	serverHandlers := &handlers.ServerHandlers{
+		Servers:        deps.Repos.Servers,
+		StorageTargets: deps.Repos.StorageTargets,
+		BackupRuns:     deps.Repos.BackupRuns,
+		Sealer:         deps.Sealer,
+		Logger:         slog.Default(),
+	}
 	storageTargetHandlers := &handlers.StorageTargetHandlers{Targets: deps.Repos.StorageTargets, Sealer: deps.Sealer}
 	retentionHandlers := &handlers.RetentionPolicyHandlers{Policies: deps.Repos.RetentionPolicies}
 	backupHandlers := &handlers.BackupHandlers{
