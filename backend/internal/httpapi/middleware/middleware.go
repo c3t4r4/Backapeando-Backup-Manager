@@ -72,7 +72,7 @@ func Recover(next http.Handler) http.Handler {
 func RequireAuth(sessions *auth.SessionManager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			session, err := sessions.Authenticate(r)
+			session, err := sessions.Authenticate(w, r)
 			if err != nil {
 				http.Error(w, `{"error":"authentication required"}`, http.StatusUnauthorized)
 				return

@@ -26,11 +26,13 @@ type SessionManager struct {
 // The cookie is HttpOnly + SameSite=Strict so it is never readable from JS
 // and is not sent on cross-site requests — appropriate for a same-origin
 // SPA that also holds SSH private keys and SAS tokens server-side.
-func (m *SessionManager) Issue(ctx context.Context, w http.ResponseWriter, userID, userAgent, ip string) error {
+// It returns the expiry it used so the caller can issue the paired CSRF
+// cookie (auth.IssueCSRFToken) with the same Expires.
+func (m *SessionManager) Issue(ctx context.Context, w http.ResponseWriter, userID, userAgent, ip string) (time.Time, error) {
 	expiresAt := time.Now().Add(m.IdleTTL)
 	session, err := m.Sessions.Create(ctx, userID, expiresAt, userAgent, ip)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 
 	http.SetCookie(w, &http.Cookie{
@@ -42,13 +44,17 @@ func (m *SessionManager) Issue(ctx context.Context, w http.ResponseWriter, userI
 		SameSite: http.SameSiteStrictMode,
 		Expires:  expiresAt,
 	})
-	return nil
+	return expiresAt, nil
 }
 
 // Authenticate reads the session cookie, validates it against the store,
 // and slides the idle expiry forward — but never past the absolute TTL
-// measured from session creation.
-func (m *SessionManager) Authenticate(r *http.Request) (domain.AdminSession, error) {
+// measured from session creation. It re-sends both the session cookie and
+// the paired CSRF cookie with the new Expires: the DB row sliding forward
+// via Extend is not enough on its own, since the browser enforces the
+// Expires attribute it was given at Issue time regardless of what the
+// server considers valid.
+func (m *SessionManager) Authenticate(w http.ResponseWriter, r *http.Request) (domain.AdminSession, error) {
 	cookie, err := r.Cookie(m.CookieName)
 	if err != nil {
 		return domain.AdminSession{}, ErrNoSession
@@ -74,6 +80,17 @@ func (m *SessionManager) Authenticate(r *http.Request) (domain.AdminSession, err
 		newExpiry = absoluteCutoff
 	}
 	_ = m.Sessions.Extend(r.Context(), session.ID, newExpiry)
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     m.CookieName,
+		Value:    session.ID,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   m.Secure,
+		SameSite: http.SameSiteStrictMode,
+		Expires:  newExpiry,
+	})
+	RefreshCSRFCookie(w, r, m.Secure, newExpiry)
 
 	return session, nil
 }

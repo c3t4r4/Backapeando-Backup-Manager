@@ -27,10 +27,11 @@
 | Cookie                                                              | Formato                                      | Expiração                              | Onde é armazenado                                              | Revogação                                                     |
 | ------------------------------------------------------------------- | -------------------------------------------- | -------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------- |
 | Sessão (`SESSION_COOKIE_NAME`, padrão `backapeando_backup_session`) | ID opaco de sessão                           | Idle TTL, deslizante até teto absoluto | `HttpOnly+SameSite=Strict`, `Secure` conforme `SECURE_COOKIES` | Servidor (`admin_sessions`), `SessionManager.Clear` na logout |
-| CSRF (`backapeando_backup_csrf`)                                    | Token opaco, legível por JS (não `HttpOnly`) | Igual à sessão (emitido junto)         | `SameSite=Strict`, `Secure` conforme `SECURE_COOKIES`          | Limpo junto no logout                                         |
+| CSRF (`backapeando_backup_csrf`)                                    | Token opaco, legível por JS (não `HttpOnly`) | Igual à sessão (emitido junto, persistente, desliza junto) | `SameSite=Strict`, `Secure` conforme `SECURE_COOKIES`          | Limpo junto no logout                                         |
 
 - Nome do cookie de sessão é **configurável** via `SESSION_COOKIE_NAME` (`internal/config/config.go`) — corrige a suposição anterior do `CLAUDE.md` de que era um valor fixo.
 - Segredo/chave da sessão: não há assinatura de token — o ID de sessão é validado por lookup em `admin_sessions` (banco), não por HMAC/JWT.
+- **Deslizamento dos cookies (desde 2026-10-28):** `SessionManager.Authenticate` (`internal/auth/session.go`) não apenas estende a validade em `admin_sessions` (`Extend`) a cada requisição autenticada — ele também reenvia `Set-Cookie` para **ambos** os cookies (sessão e CSRF) com o novo `Expires`. Antes disso, o atributo `Expires` ficava congelado no valor do login, e o cookie CSRF nem tinha `Expires` (virava cookie "de sessão do navegador", apagado por reinício do navegador/SO). Isso causava `403 csrf token missing or invalid` em usuários com sessão longa, mesmo com a sessão ainda válida no servidor. Ver `internal/auth/csrf.go` (`IssueCSRFToken`, `RefreshCSRFCookie`) e `internal/auth/session.go` (`Issue`, `Authenticate`).
 
 ## Papéis e permissões
 
@@ -83,6 +84,12 @@ Regra: autorização verificada **no servidor** (`RequireAuth`/`RequireCSRF`). O
 
 - Sem token de recuperação por e-mail — adequado para ferramenta interna de operador único.
 
+### Requisição autenticada (qualquer rota `/api/*` protegida)
+
+1. `RequireAuth` chama `SessionManager.Authenticate(w, r)`.
+2. Sessão validada em `admin_sessions`; se expirada (idle ou teto absoluto), sessão é apagada e `401`.
+3. Se válida, `expires_at` é estendido no banco (`Extend`) e os cookies de sessão e CSRF são reenviados (`Set-Cookie`) com o novo `Expires`, mantendo-os sincronizados com a validade real no servidor — ver nota de deslizamento acima.
+
 ### Logout
 
 1. `POST /api/auth/logout` — `SessionManager.Clear`: apaga a sessão em `admin_sessions` e limpa cookies de sessão e CSRF no browser.
@@ -120,3 +127,4 @@ Regra: autorização verificada **no servidor** (`RequireAuth`/`RequireCSRF`). O
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- | -------------------------------------------------------------------------------- |
 | 2026-09-15 | Documento criado do zero; corrigida a suposição de cookie de sessão com nome fixo (na verdade configurável via `SESSION_COOKIE_NAME`)      | `docs/` ausente antes desta tarefa                    | `.claude/plans/Backapeando-2026-09-15-17-41-inicializacao-governanca.md`         |
 | 2026-09-15 | Gestão de admin_users passa a ter uma via web (`/api/admin-users*`), além do CLI; `GET /auth/me`/`login` passam a retornar `id` do usuário | CRUD de usuário administrador solicitado pelo usuário | `.claude/plans/Backapeando-2026-09-15-18-16-crud-admin-users-e-fix-historico.md` |
+| 2026-10-28 | `SessionManager.Authenticate` passa a reenviar os cookies de sessão e CSRF com `Expires` deslizado a cada requisição autenticada; cookie CSRF passa a ter `Expires` explícito (persistente) desde o login, igual ao de sessão | Corrigir `403 csrf token missing or invalid` relatado após sessão longa (Expurgo Global) — cookie CSRF, sem `Expires`, era apagado por reinício do navegador enquanto o cookie de sessão (persistente) sobrevivia | `.claude/plans/Backapeando-2026-10-28-expurgo-global-csrf-fix.md` |

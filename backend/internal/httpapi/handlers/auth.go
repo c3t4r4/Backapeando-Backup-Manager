@@ -71,11 +71,12 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Sessions.Issue(r.Context(), w, user.ID, r.UserAgent(), ip); err != nil {
+	expiresAt, err := h.Sessions.Issue(r.Context(), w, user.ID, r.UserAgent(), ip)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	if _, err := auth.IssueCSRFToken(w, h.SecureCookies); err != nil {
+	if _, err := auth.IssueCSRFToken(w, h.SecureCookies, expiresAt); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
