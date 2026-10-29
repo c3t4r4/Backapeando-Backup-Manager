@@ -226,6 +226,10 @@ Docker Swarm **não suporta** a sintaxe longa de `depends_on` com `condition:` (
    docker service update --force --with-registry-auth backapeando_web
    ```
 
+2.1. **Deploy via Portainer (colagem manual de YAML):** quando o stack é atualizado colando o conteúdo do `docker-stack.yml` diretamente na UI do Portainer (sem `docker stack deploy` por CLI), é obrigatório colar o arquivo **inteiro, já atualizado** pelo `build-images.sh` (que reescreve as 3 tags `image:` a cada release) — e clicar em "Update the stack". `build-images.sh` já imprime o conteúdo atual de `docker-stack.yml` ao final da execução, pronto para copiar/colar.
+
+   **Não existe nenhuma env var (ex.: `APP_VERSION`) que controle a versão reportada por `/api/health`.** A versão é fixada *dentro do binário* em build-time via `-ldflags -X main.Version=...` (ver seção "Build e push"). Editar env vars no stack do Portainer sem recolar o YAML atualizado não tem nenhum efeito sobre `/api/health` — o sintoma será o mesmo da seção "binário Swarm desatualizado" abaixo, mesmo com o build/push já feitos corretamente.
+
 3. Monitorar logs inicial de crash-loop esperado:
    - `api` e `worker` podem fazer crash-loop por ~10-50s enquanto Postgres/Redis inicializam
    - `web` sobe normalmente mas requests falham com 5xx até `api` estar healthy
@@ -371,3 +375,4 @@ Não coberto neste repositório para produção — o serviço já está declara
 | 2026-10-05 | Checklist operacional “404 em `POST /api/retention-sweep` → verificar `/api/health`” adicionado ao procedimento de deploy | prod | Reincidência do sintoma (Settings → Rodar expurgo → 404); causa raiz continua sendo binário antigo no Swarm, não bug de rota no código | `.cursor/plans/analise_retencao_expurgo_24ceed02.plan.md` |
 | 2026-10-05 | Migração `000008_servers_blob_prefix` + backfill idempotente em `cmd/api` e `cmd/worker` após `db.Migrate` | prod, dev | RN-BACKUP-034: prefixo de storage imutável no rename; Slugify aplicado em Go (não SQL) | `.cursor/plans/pendencias_retencao_blobs_6f472632.plan.md` |
 | 2026-10-05 | Removidos volumes `backup_api_app:/app` e `backup_worker_app:/app` de `docker-stack.yml`; checklist 404 atualizado (inspect Mounts + `docker volume rm` órfãos); seção “Nunca montar volume sobre `/app`” | prod | Causa raiz do 404 com tag v1.0.7: volume nomeado sombreava `/app` e mantinha binário antigo (health sem `version`) | `.cursor/plans/fix_retention-sweep_404_deploy_42b89a6e.plan.md` |
+| 2026-10-29 | Documentado o fluxo de deploy via Portainer com colagem manual de YAML (seção "Procedimento", item 2.1); explicitado que não existe env var `APP_VERSION` (nem outra) que controle a versão de `/api/health` — ela é fixada em build-time via ldflags; `build-images.sh` passa a imprimir `docker-stack.yml` atualizado ao final da execução para facilitar o copy/paste no Portainer | prod, ci/cd | Usuário atualizava uma env var `APP_VERSION` inexistente no Portainer esperando que isso mudasse a versão pós-deploy v1.0.9; causa raiz era confusão de processo, não bug — `build-images.sh` e `docker-stack.yml` já estavam corretos | `.claude/plans/Backapeando-2026-10-29-23-45-fix-health-version-portainer-deploy.md` |
