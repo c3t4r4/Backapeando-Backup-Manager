@@ -137,6 +137,3 @@ echo "Não existe env var (ex.: APP_VERSION) que mude a versão reportada por /a
 echo "No Portainer, abra o stack 'backapeando' e cole o conteúdo ATUALIZADO abaixo em"
 echo "'Update the stack' (colar o YAML inteiro, não editar env vars de versão):"
 echo ""
-echo "----- docker-stack.yml -----"
-cat docker-stack.yml
-echo "----- fim docker-stack.yml -----"
