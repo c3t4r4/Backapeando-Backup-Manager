@@ -22,7 +22,27 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
+
+// unsignedHeaders are headers the SDK adds before signing. Reverse proxies in
+// front of self-hosted S3 servers (Traefik, Cloudflare, ...) commonly rewrite
+// or drop them, which breaks the signature (SignatureDoesNotMatch). They are
+// not required by SigV4, so they are removed before the request is signed.
+var unsignedHeaders = []string{"Accept-Encoding", "Amz-Sdk-Invocation-Id", "Amz-Sdk-Request"}
+
+func stripUnsignedHeaders(stack *middleware.Stack) error {
+	return stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc("StripProxySensitiveHeaders",
+		func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
+			if req, ok := in.Request.(*smithyhttp.Request); ok {
+				for _, h := range unsignedHeaders {
+					req.Header.Del(h)
+				}
+			}
+			return next.HandleFinalize(ctx, in)
+		}), "Signing", middleware.Before)
+}
 
 // BlobInfo describes a single stored object, mirroring azureblob.BlobInfo
 // and storage.BlobInfo in shape. This package defines its own copy (rather
@@ -91,6 +111,7 @@ func NewBackend(t Target) (*Backend, error) {
 			o.BaseEndpoint = aws.String(t.Endpoint)
 		}
 		o.UsePathStyle = t.UsePathStyle
+		o.APIOptions = append(o.APIOptions, stripUnsignedHeaders)
 	})
 
 	return &Backend{
