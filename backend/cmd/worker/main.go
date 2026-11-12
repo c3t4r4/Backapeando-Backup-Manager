@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -39,6 +40,8 @@ func exitOnErr(err error) {
 //
 // Returns an error if any initialization step fails.
 func runWorker() error {
+	setupLogger()
+
 	// Load configuration with fail-fast on missing required env vars
 	cfg, err := config.Load()
 	if err != nil {
@@ -117,6 +120,7 @@ func runWorker() error {
 		"gracefulShutdownTimeout", gracefulTimeout,
 		"backupTaskTimeout", backupTaskTimeout,
 		"watchdogPollInterval", watchdogPollInterval,
+		"backupProgressInterval", scheduler.ProgressInterval(),
 	)
 
 	// Setup signal handler for graceful shutdown
@@ -152,6 +156,37 @@ func runWorker() error {
 
 	slog.Info("worker_stopped")
 	return nil
+}
+
+// setupLogger applies LOG_LEVEL (debug, info, warn, error). Empty and unknown
+// values stay at info. The chosen value is not logged when it is invalid, so a
+// mistaken secret in the variable is not written to stderr.
+func setupLogger() {
+	raw := os.Getenv("LOG_LEVEL")
+	level, ok := parseLogLevel(raw)
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	if strings.TrimSpace(raw) != "" && !ok {
+		slog.Warn("invalid LOG_LEVEL, using info")
+	}
+}
+
+// parseLogLevel reports whether raw is a known level. Unknown values return
+// info and ok=false. Empty is info and ok=true.
+func parseLogLevel(raw string) (slog.Level, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return slog.LevelInfo, true
+	case "info":
+		return slog.LevelInfo, true
+	case "debug":
+		return slog.LevelDebug, true
+	case "warn", "warning":
+		return slog.LevelWarn, true
+	case "error":
+		return slog.LevelError, true
+	default:
+		return slog.LevelInfo, false
+	}
 }
 
 // setupSignalHandler registers SIGTERM and SIGINT handlers to the provided channel.

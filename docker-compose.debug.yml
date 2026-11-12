@@ -1,0 +1,18 @@
+# Opt-in overlay. docker-compose.yml runs the published worker image, so a
+# local source change is invisible until this file builds the worker.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d --build worker
+#   docker compose -f docker-compose.yml -f docker-compose.debug.yml logs -f worker
+#
+# Stage lines (resolve_container, dump_stream, dump_upload, dump_wait) are
+# info. LOG_LEVEL=debug also shows the scheduler's "no servers eligible" lines.
+# To fail a stuck run sooner than 6h, add BACKUP_TASK_TIMEOUT (seconds).
+services:
+  worker:
+    build:
+      context: ./backend
+      dockerfile: cmd/worker/Dockerfile
+    image: backapeando-worker:local
+    environment:
+      LOG_LEVEL: debug
+      BACKUP_PROGRESS_INTERVAL: "15"

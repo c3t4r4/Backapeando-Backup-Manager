@@ -65,6 +65,9 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 	e.logger.InfoContext(ctx, "backup execution started",
 		slog.String("backupRunId", backupRun.ID),
 		slog.String("serverId", server.ID),
+		slog.String("connectionMode", string(server.ConnectionMode)),
+		slog.String("deploymentMode", string(server.DeploymentMode)),
+		slog.String("dbEngine", string(server.DBEngine)),
 	)
 
 	// Mark as running
@@ -142,6 +145,16 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 	// remote Docker daemon before building the dump command (RN-BACKUP-023).
 	dumpServer := *server
 	if server.DeploymentMode == domain.DeploymentModeDocker {
+		containerQuery := ""
+		if server.ContainerName != nil {
+			containerQuery = *server.ContainerName
+		}
+		e.logger.InfoContext(ctx, "backup stage",
+			slog.String("stage", "resolve_container"),
+			slog.String("backupRunId", backupRun.ID),
+			slog.String("connectionMode", string(server.ConnectionMode)),
+			slog.String("containerQuery", containerQuery),
+		)
 		resolvedName, resolveErr := ResolveContainerName(ctx, runner, *server.ContainerName)
 		if resolveErr != nil {
 			errMsg := backupcore.TruncateText(backupcore.RedactSecret(fmt.Sprintf("falha ao resolver nome do container: %s", resolveErr.Error()), dbPassword), backupcore.MaxStoredErrorLen)
@@ -153,6 +166,11 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 			return fmt.Errorf("resolve container name: %w", resolveErr)
 		}
 		dumpServer.ContainerName = &resolvedName
+		e.logger.InfoContext(ctx, "backup stage",
+			slog.String("stage", "resolve_container_done"),
+			slog.String("backupRunId", backupRun.ID),
+			slog.String("container", resolvedName),
+		)
 	}
 
 	// Build the dump command(s) with shell quoting (RN-BACKUP-008)
@@ -195,6 +213,11 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 	// attempted (see the deferred cleanup above), whether this step, the
 	// stream, or the upload succeeds or fails.
 	if plan.PreCmd != "" {
+		e.logger.InfoContext(ctx, "backup stage",
+			slog.String("stage", "pre_command"),
+			slog.String("backupRunId", backupRun.ID),
+			slog.String("dbEngine", string(server.DBEngine)),
+		)
 		stdout, stderr, exitCode, runErr := runner.RunCommand(ctx, plan.PreCmd)
 		if runErr != nil || exitCode != 0 {
 			errMsg := backupcore.TruncateText(backupcore.RedactSecret(fmt.Sprintf("falha ao executar BACKUP DATABASE (exit code %d)", exitCode), dbPassword), backupcore.MaxStoredErrorLen)
@@ -212,7 +235,15 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 		}
 	}
 
-	// Start the dump stream
+	// Start the dump stream. The command string is not logged: in docker mode
+	// it carries the database password in `docker exec -e`.
+	e.logger.InfoContext(ctx, "backup stage",
+		slog.String("stage", "dump_stream"),
+		slog.String("backupRunId", backupRun.ID),
+		slog.String("connectionMode", string(server.ConnectionMode)),
+		slog.String("dbEngine", string(server.DBEngine)),
+		slog.String("deploymentMode", string(server.DeploymentMode)),
+	)
 	dumpStart := time.Now()
 	stdout, wait, err := runner.StreamCommand(ctx, plan.StreamCmd)
 	if err != nil {
@@ -228,14 +259,24 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 	// Build blob name: <slugified-server>/<dbname>_<timestamp>.dump
 	blobName := backupcore.FormatBackupBlobName(backupcore.StoragePrefix(*server), server.DBName, time.Now())
 
-	// Upload stream to the storage backend
+	// Upload stream to the storage backend. The heartbeat keeps firing while
+	// Read blocks, including when zero bytes have arrived yet.
+	counter := &byteCounter{r: stdout}
 	uploadStart := time.Now()
-	uploadedBytes, err := backend.UploadStream(ctx, blobName, stdout)
+	stopUpload := watchProgress(ctx, e.logger, progressInterval(), "dump_upload", backupRun.ID, counter.Bytes, uploadStart)
+	uploadedBytes, err := backend.UploadStream(ctx, blobName, counter)
+	stopUpload()
 	dumpDurationMS := int(time.Since(dumpStart).Milliseconds())
 	uploadDurationMS := int(time.Since(uploadStart).Milliseconds())
 
-	// Wait for SSH command to complete
+	e.logger.InfoContext(ctx, "backup stage",
+		slog.String("stage", "dump_wait"),
+		slog.String("backupRunId", backupRun.ID),
+		slog.Int64("bytesRead", counter.Bytes()),
+	)
+	stopWait := watchProgress(ctx, e.logger, progressInterval(), "dump_wait", backupRun.ID, counter.Bytes, uploadStart)
 	waitErr := wait()
+	stopWait()
 	if err != nil || waitErr != nil {
 		var rawMsg string
 		switch {

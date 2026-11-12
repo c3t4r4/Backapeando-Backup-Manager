@@ -273,6 +273,8 @@ Key endpoint groups:
 | `SECURE_COOKIES`                 | —                            | Yes      | Must be exactly `"true"` or `"false"` (no implicit default)   |
 | `CORS_ALLOWED_ORIGIN`            | (empty)                      | No       | Enable CORS for exactly one origin; never use `*`             |
 | `REDIS_URL`                      | (empty)                      | No       | Redis URL for distributed rate limiting (e.g., `redis://...`) |
+| `LOG_LEVEL`                      | `info`                       | No       | Worker log level: `debug`, `info`, `warn`, `error`            |
+| `BACKUP_PROGRESS_INTERVAL`       | `15`                         | No       | Seconds between progress lines while a backup is blocked. `0` turns them off |
 
 See [`backend/.env.example`](./backend/.env.example) for template.
 
@@ -328,6 +330,15 @@ npm run lint                     # TypeScript & ESLint
 # Integration (full stack with Docker)
 docker-compose up -d
 docker-compose logs -f
+
+# Local dump only (throwaway Postgres, ~2MB, no API and no SSH).
+# Fails if pg_dump is still running after 60s.
+./scripts/smoke-local-dump.sh
+
+# Worker built from this checkout, with stage logs (the default compose
+# image is the published one and will not show new log lines).
+docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d --build worker
+docker compose -f docker-compose.yml -f docker-compose.debug.yml logs -f worker
 # Then run backend integration tests above with DATABASE_URL pointing to docker-compose Postgres
 ```
 
@@ -376,3 +387,4 @@ For issues or questions, see:
 | Data | Alteração |
 | --- | --- |
 | 2026-11-12 | O propósito passa a citar acesso Localhost: dump de container Docker no mesmo host, via socket, sem chave SSH. |
+| 2026-11-12 | Comandos para o smoke de dump local e para o worker com log de etapa (`docker-compose.debug.yml`). |

@@ -114,9 +114,30 @@ não versionado, com `.env.example` documentando apenas o nome da variável.
 | `GRACEFUL_SHUTDOWN_TIMEOUT`                | Timeout de shutdown gracioso (segundos)      | `a definir`                                  | env                 | `300` (dev)                                    |
 | `BACKUP_TASK_TIMEOUT`                      | Timeout máximo de uma execução de backup (segundos) — após o handshake SSH, que já tinha seu próprio timeout de 30s (RN-BACKUP-015) | Não | env | `21600` (6h) |
 | `WATCHDOG_POLL_INTERVAL`                   | Intervalo do watchdog que marca como `failed` runs presos em `running` além de `BACKUP_TASK_TIMEOUT` (segundos) | Não | env | `300` (5min) |
+| `LOG_LEVEL`                                | Nível do `slog` do worker (`debug`, `info`, `warn`, `error`) | Não | env | `info` |
+| `BACKUP_PROGRESS_INTERVAL`                 | Batimento, em segundos, enquanto o dump/upload está bloqueado. `0` desliga. Valor inválido cai no padrão | Não | env | `15` |
 
 - Arquivos de exemplo: `backend/.env.example` e `frontend/.env.example` (rastreados no Git). Há também um `.env-example` na raiz (sem ponto antes de "example", nome diferente do padrão) — checar se é intencional ou duplicata a consolidar.
 - `.env` **deve** estar no `.gitignore` — já está (`!.env.example` cobre a exceção correta); `.env-example` (raiz, sem ponto) não corresponde ao padrão `.env.*` nem `.env.example`, então **não está coberto pela negação do `.gitignore`** hoje, mas por não começar com `.env` (ponto) ele também não é excluído pela primeira regra — verificar se isso é proposital.
+
+### Diagnóstico de backup local
+
+`docker-compose.yml` sobe o worker pela imagem publicada (`c3t4r4/backapeando:worker-${APP_VERSION}`). Log de etapa novo só aparece depois de buildar este checkout:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d --build worker
+docker compose -f docker-compose.yml -f docker-compose.debug.yml logs -f worker
+```
+
+A última linha `backup stage` diz onde parou: `resolve_container` (o `docker ps` no socket), `dump_stream` (o `docker exec` ainda não devolveu stdout), `dump_upload` com `bytesRead=0` (o dump não produziu byte nenhum) ou `dump_wait` (o upload leu os bytes e o processo não terminou). O comando de dump não entra no log, porque em modo Docker ele carrega a senha em `-e`.
+
+Para separar o `pg_dump` do storage e do worker:
+
+```bash
+./scripts/smoke-local-dump.sh
+```
+
+O script sobe um Postgres descartável, carrega cerca de 2 MB e mede `docker exec` + `pg_dump -Fc`. Se isso termina em segundos e o worker continua em `dump_upload` com `bytesRead=0`, o travamento está no container alvo ou no storage, não no tamanho do banco.
 
 ## Build
 
@@ -379,3 +400,4 @@ Não coberto neste repositório para produção — o serviço já está declara
 | 2026-10-05 | Removidos volumes `backup_api_app:/app` e `backup_worker_app:/app` de `docker-stack.yml`; checklist 404 atualizado (inspect Mounts + `docker volume rm` órfãos); seção “Nunca montar volume sobre `/app`” | prod | Causa raiz do 404 com tag v1.0.7: volume nomeado sombreava `/app` e mantinha binário antigo (health sem `version`) | `.cursor/plans/fix_retention-sweep_404_deploy_42b89a6e.plan.md` |
 | 2026-10-29 | Documentado o fluxo de deploy via Portainer com colagem manual de YAML (seção "Procedimento", item 2.1); explicitado que não existe env var `APP_VERSION` (nem outra) que controle a versão de `/api/health` — ela é fixada em build-time via ldflags; `build-images.sh` passa a imprimir `docker-stack.yml` atualizado ao final da execução para facilitar o copy/paste no Portainer | prod, ci/cd | Usuário atualizava uma env var `APP_VERSION` inexistente no Portainer esperando que isso mudasse a versão pós-deploy v1.0.9; causa raiz era confusão de processo, não bug — `build-images.sh` e `docker-stack.yml` já estavam corretos | `.claude/plans/Backapeando-2026-10-29-23-45-fix-health-version-portainer-deploy.md` |
 | 2026-11-12 | `docker-cli` + `su-exec` nas imagens de API e worker; `backend/docker-entrypoint.sh` entra no GID do socket e cai para `appuser`; volume `/var/run/docker.sock` em compose, compose de prod e stack | dev, prod | Backup de container Docker no mesmo host, sem SSH (RN-BACKUP-038). Sem rebuild e redeploy o modo local não existe em produção | `.cursor/plans/localhost_sem_ssh_7dbccadb.plan.md` |
+| 2026-11-12 | `LOG_LEVEL` e `BACKUP_PROGRESS_INTERVAL` no worker; overlay `docker-compose.debug.yml`; script `scripts/smoke-local-dump.sh` | dev | Backup local de poucos MB ficava mudo entre "started" e o upload, com timeout de 6 h. O Compose de dev usa a imagem publicada, então o overlay builda o worker deste checkout | `.cursor/plans/Backapeando-2026-11-12-12-15-debug-backup-local.md` |
