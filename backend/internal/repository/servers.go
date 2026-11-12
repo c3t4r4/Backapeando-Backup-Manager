@@ -20,7 +20,7 @@ type ServerRepo struct {
 }
 
 const serverColumns = `
-	id, name, host, port, ssh_user, db_engine, deployment_mode, container_name, db_name, db_user,
+	id, name, host, port, ssh_user, connection_mode, db_engine, deployment_mode, container_name, db_name, db_user,
 	pg_dump_extra_args, mysql_dump_extra_args, sqlcmd_extra_args, db_password_encrypted,
 	ssh_private_key_encrypted, ssh_public_key, ssh_key_fingerprint, ssh_host_key_fingerprint,
 	storage_target_id, COALESCE(blob_prefix, '') AS blob_prefix, cron_expression, enabled, status,
@@ -30,7 +30,7 @@ const serverColumns = `
 func scanServer(row pgx.Row) (domain.Server, error) {
 	var s domain.Server
 	err := row.Scan(
-		&s.ID, &s.Name, &s.Host, &s.Port, &s.SSHUser, &s.DBEngine, &s.DeploymentMode, &s.ContainerName, &s.DBName, &s.DBUser,
+		&s.ID, &s.Name, &s.Host, &s.Port, &s.SSHUser, &s.ConnectionMode, &s.DBEngine, &s.DeploymentMode, &s.ContainerName, &s.DBName, &s.DBUser,
 		&s.PgDumpExtraArgs, &s.MySQLDumpExtraArgs, &s.SqlCmdExtraArgs, &s.DBPasswordEncrypted,
 		&s.SSHPrivateKeyEncrypted, &s.SSHPublicKey, &s.SSHKeyFingerprint, &s.SSHHostKeyFingerprint,
 		&s.StorageTargetID, &s.BlobPrefix, &s.CronExpression, &s.Enabled, &s.Status,
@@ -57,13 +57,23 @@ func (r *ServerRepo) Create(ctx context.Context, s domain.Server) (domain.Server
 	if strings.TrimSpace(s.BlobPrefix) == "" {
 		s.BlobPrefix = backupcore.Slugify(s.Name)
 	}
+	if s.ConnectionMode == "" {
+		s.ConnectionMode = domain.ConnectionModeSSH
+	}
+	if s.Status == "" {
+		if s.ConnectionMode == domain.ConnectionModeLocal {
+			s.Status = domain.ServerStatusPendingLocal
+		} else {
+			s.Status = domain.ServerStatusPendingKey
+		}
+	}
 	row := r.pool.QueryRow(ctx, `
-		INSERT INTO servers (id, name, host, port, ssh_user, db_engine, deployment_mode, container_name, db_name, db_user,
+		INSERT INTO servers (id, name, host, port, ssh_user, connection_mode, db_engine, deployment_mode, container_name, db_name, db_user,
 		                      pg_dump_extra_args, mysql_dump_extra_args, sqlcmd_extra_args, db_password_encrypted,
-		                      storage_target_id, blob_prefix, cron_expression)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-		RETURNING `+serverColumns, s.ID, s.Name, s.Host, s.Port, s.SSHUser, s.DBEngine, s.DeploymentMode, s.ContainerName, s.DBName, s.DBUser,
-		s.PgDumpExtraArgs, s.MySQLDumpExtraArgs, s.SqlCmdExtraArgs, s.DBPasswordEncrypted, s.StorageTargetID, s.BlobPrefix, s.CronExpression)
+		                      storage_target_id, blob_prefix, cron_expression, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		RETURNING `+serverColumns, s.ID, s.Name, s.Host, s.Port, s.SSHUser, s.ConnectionMode, s.DBEngine, s.DeploymentMode, s.ContainerName, s.DBName, s.DBUser,
+		s.PgDumpExtraArgs, s.MySQLDumpExtraArgs, s.SqlCmdExtraArgs, s.DBPasswordEncrypted, s.StorageTargetID, s.BlobPrefix, s.CronExpression, s.Status)
 	created, err := scanServer(row)
 	if err != nil {
 		return domain.Server{}, fmt.Errorf("create server: %w", err)
@@ -108,12 +118,12 @@ func (r *ServerRepo) Get(ctx context.Context, id string) (domain.Server, error) 
 func (r *ServerRepo) Update(ctx context.Context, s domain.Server) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE servers
-		SET name = $2, host = $3, port = $4, ssh_user = $5, db_engine = $6, deployment_mode = $7,
-		    container_name = $8, db_name = $9, db_user = $10, pg_dump_extra_args = $11,
-		    mysql_dump_extra_args = $12, sqlcmd_extra_args = $13,
-		    storage_target_id = $14, cron_expression = $15, updated_at = now()
+		SET name = $2, host = $3, port = $4, ssh_user = $5, connection_mode = $6, db_engine = $7, deployment_mode = $8,
+		    container_name = $9, db_name = $10, db_user = $11, pg_dump_extra_args = $12,
+		    mysql_dump_extra_args = $13, sqlcmd_extra_args = $14,
+		    storage_target_id = $15, cron_expression = $16, updated_at = now()
 		WHERE id = $1
-	`, s.ID, s.Name, s.Host, s.Port, s.SSHUser, s.DBEngine, s.DeploymentMode,
+	`, s.ID, s.Name, s.Host, s.Port, s.SSHUser, s.ConnectionMode, s.DBEngine, s.DeploymentMode,
 		s.ContainerName, s.DBName, s.DBUser, s.PgDumpExtraArgs,
 		s.MySQLDumpExtraArgs, s.SqlCmdExtraArgs, s.StorageTargetID, s.CronExpression)
 	if err != nil {
@@ -142,6 +152,20 @@ func (r *ServerRepo) SetSSHKeyPair(ctx context.Context, id string, encryptedPriv
 	`, id, encryptedPrivateKey, publicKey, fingerprint)
 	if err != nil {
 		return fmt.Errorf("set ssh key pair: %w", err)
+	}
+	return nil
+}
+
+// SetStatusAndEnabled sets status and the manual enable flag together.
+// Used when the operator changes connection mode: the previous ready state
+// no longer applies to the new execution path, so scheduling stays off
+// until a successful test-connection.
+func (r *ServerRepo) SetStatusAndEnabled(ctx context.Context, id string, status domain.ServerStatus, enabled bool) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE servers SET status = $2, enabled = $3, updated_at = now() WHERE id = $1
+	`, id, status, enabled)
+	if err != nil {
+		return fmt.Errorf("set status and enabled: %w", err)
 	}
 	return nil
 }

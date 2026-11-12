@@ -44,7 +44,8 @@ async function mountServerNewView() {
  * template's v-model does: by emitting `update:modelValue` directly on the
  * `Select` component instance, rather than simulating a pointer-driven
  * open+click sequence through its teleported popover. `index` follows DOM
- * order: 0 = motor do banco (dbEngine), 1 = onde o banco roda (deploymentMode).
+ * order: 0 = acesso (connectionMode), 1 = motor do banco (dbEngine),
+ * 2 = onde o banco roda (deploymentMode).
  */
 async function setSelectValue(
   wrapper: VueWrapper,
@@ -226,7 +227,7 @@ describe('ServerNewView', () => {
       const { wrapper } = await mountServerNewView()
       await flushPromises()
 
-      await setSelectValue(wrapper, 0, 'mysql')
+      await setSelectValue(wrapper, 1, 'mysql')
 
       expect(
         wrapper.find('[data-testid="pg-dump-extra-args-input"]').exists()
@@ -246,7 +247,7 @@ describe('ServerNewView', () => {
       const { wrapper } = await mountServerNewView()
       await flushPromises()
 
-      await setSelectValue(wrapper, 0, 'sqlserver')
+      await setSelectValue(wrapper, 1, 'sqlserver')
 
       expect(
         wrapper.find('[data-testid="sqlcmd-extra-args-input"]').exists()
@@ -260,7 +261,7 @@ describe('ServerNewView', () => {
       const { wrapper } = await mountServerNewView()
       await flushPromises()
 
-      await setSelectValue(wrapper, 1, 'host')
+      await setSelectValue(wrapper, 2, 'host')
 
       expect(
         wrapper.find('[data-testid="container-name-input"]').exists()
@@ -275,7 +276,7 @@ describe('ServerNewView', () => {
       const { wrapper } = await mountServerNewView()
       await flushPromises()
 
-      await setSelectValue(wrapper, 1, 'host')
+      await setSelectValue(wrapper, 2, 'host')
       await wrapper.find('[data-testid="name-input"]').setValue('New Server')
       await wrapper.find('[data-testid="host-input"]').setValue('10.0.0.1')
       await wrapper.find('[data-testid="ssh-user-input"]').setValue('ubuntu')
@@ -301,7 +302,7 @@ describe('ServerNewView', () => {
       const { wrapper } = await mountServerNewView()
       await flushPromises()
 
-      await setSelectValue(wrapper, 0, 'mysql')
+      await setSelectValue(wrapper, 1, 'mysql')
       await wrapper.find('[data-testid="name-input"]').setValue('New Server')
       await wrapper.find('[data-testid="host-input"]').setValue('10.0.0.1')
       await wrapper.find('[data-testid="ssh-user-input"]').setValue('ubuntu')
@@ -366,5 +367,25 @@ describe('ServerNewView', () => {
       expect(previewWithPassword).not.toContain('super-secret-value')
       expect(previewWithPassword).toContain('***')
     })
+  })
+
+  it('hides SSH fields when access is localhost', async () => {
+    const api = await import('@/api')
+    vi.mocked(api.getStorageTargets).mockResolvedValue([])
+
+    const { wrapper } = await mountServerNewView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="host-input"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="ssh-user-input"]').exists()).toBe(true)
+
+    await setSelectValue(wrapper, 0, 'local')
+
+    expect(wrapper.find('[data-testid="host-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="port-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="ssh-user-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="container-name-input"]').exists()).toBe(
+      true
+    )
   })
 })

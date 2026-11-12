@@ -3,7 +3,7 @@
 ## Status atual
 
 - Estado: EM DESENVOLVIMENTO
-- Última atualização: 2026-09-17 (Correção de timezone do cron + RN-BACKUP-032 + ADR-008)
+- Última atualização: 2026-11-12 (acesso local ao Docker do mesmo host, RN-BACKUP-038)
 - Branch atual: `main` (única branch, sem remote)
 
 ## Em andamento
@@ -101,20 +101,22 @@ Todas as regras abaixo estão `⚠ inferida` em `docs/RegrasNegocio.md`, aguarda
 | 2026-10-05 | Pendências retenção: failedDelete, blob_prefix, naming unificado | `SweepResult.FailedDelete` wired em `/backup-now`; migração `000008` + backfill; `backupcore.Slugify`/`FormatBackupBlobName`/`StoragePrefix`; HTTP e worker geram o mesmo padrão de blob. RN-BACKUP-034. | RegrasNegocio, API, Arquitetura, Infraestrutura, Memoria, Progresso, AGENTS, types.ts |
 | 2026-10-05 | Eliminar 404 retention-sweep: volume `/app` + hardening | Causa raiz: volumes Swarm `backup_api_app`/`backup_worker_app` sobre `/app`. Removidos do `docker-stack.yml`. Testes `router_routes_test.go` (health+version, POST→401). Settings 404 com mensagem de deploy. **Probe ao fechar:** `GET /api/health` → `version=v1.0.7`; `POST /api/retention-sweep` sem CSRF → **403** (rota existe; nunca 404). **Ops restante no host Swarm:** `docker stack deploy -c docker-stack.yml backapeando` (aplica remoção dos mounts) → `inspect Mounts` → `docker volume rm` órfãos. | Infraestrutura, Frontend, Memoria, Progresso |
 | 2026-10-05 | pg_dump host default + stats retidos na grid + artefato no histórico | `-h localhost` injetado em modo host (skip se extras já têm `-h`); `GET /api/servers` com `retainedBackupCount`/`Bytes`; histórico com `artifactPurged` via `retention_deletions` por blob_name. RN-BACKUP-035/036/037. | RegrasNegocio, API, Frontend, Memoria, Progresso |
+| 2026-11-06 | Fix S3 `SignatureDoesNotMatch` atrás de proxy | `NewBackend` remove `Accept-Encoding` e `Amz-Sdk-*` antes de assinar (SigV4), como o awscli. Sem alteração de contrato/comportamento de negócio. | Progresso, Memoria |
+| 2026-11-12 | Acesso local ao Docker do mesmo host | `connectionMode` ssh/local. Local não gera chave, status `pending_local`, dump via socket na API e no worker, só com `deploymentMode=docker`. RN-BACKUP-038 (⚠ inferida). | RegrasNegocio, Arquitetura, Organograma, Infraestrutura, API, Frontend, Memoria, Progresso, README |
 
 ### Sincronização desta tarefa (estado real)
 
 | Documento | Estado | Motivo |
 | --- | --- | --- |
-| `docs/RegrasNegocio.md` | atualizado | RN-BACKUP-035/036/037 |
-| `docs/Arquitetura.md` | sem alteração | sem mudança de camada/módulo |
-| `docs/Organograma.md` | sem alteração | fluxo de negócio inalterado |
-| `docs/Infraestrutura.md` | sem alteração | sem Docker/deploy |
-| `docs/API.md` | atualizado | campos list servers + artifactPurged |
-| `docs/Frontend.md` | atualizado | colunas T-03/T-06 + hint host |
-| `docs/Auth.md` | sem alteração | — |
-| `docs/RAG.md` | sem alteração | — |
+| `docs/RegrasNegocio.md` | atualizado | RN-BACKUP-038 criada (⚠ inferida); RN-BACKUP-001, RN-BACKUP-005 e RN-BACKUP-013 revisadas |
+| `docs/Arquitetura.md` | atualizado | Dois caminhos de execução (SSH e localexec). `docs/arquitetura.html` não reautorado |
+| `docs/Organograma.md` | atualizado | Fluxo e integração do socket Docker |
+| `docs/Infraestrutura.md` | atualizado | docker-cli, entrypoint com GID, volume do socket |
+| `docs/API.md` | atualizado | `connectionMode` e 400 nas operações de chave em modo local |
+| `docs/Frontend.md` | atualizado | Select de acesso e campos condicionais |
+| `docs/Auth.md` | sem alteração | authn/authz inalterados |
+| `docs/RAG.md` | sem alteração | corpus e exclusões inalterados |
 | `docs/Progresso.md` | atualizado | sempre |
-| `docs/Memoria.md` | atualizado | match de expurgo por blob_name |
-| `docs/Harness.md` | sem alteração | — |
-| 2026-11-06 | Fix S3 `SignatureDoesNotMatch` atrás de proxy | `NewBackend` remove `Accept-Encoding` e `Amz-Sdk-*` antes de assinar (SigV4), como o awscli. Sem alteração de contrato/comportamento de negócio. | `docs/Progresso.md`, `docs/Memoria.md` |
+| `docs/Memoria.md` | atualizado | GID do socket, API e worker executam o dump, porta 0 |
+| `docs/Harness.md` | sem alteração | papéis do harness inalterados |
+| `README.md` | atualizado | propósito passa a citar o acesso local e o socket |

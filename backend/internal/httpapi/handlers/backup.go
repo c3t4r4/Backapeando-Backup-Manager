@@ -17,7 +17,6 @@ import (
 	"backapeando-backup-manager/internal/repository"
 	"backapeando-backup-manager/internal/retention"
 	"backapeando-backup-manager/internal/scheduler"
-	"backapeando-backup-manager/internal/sshclient"
 	"backapeando-backup-manager/internal/storage"
 )
 
@@ -197,9 +196,10 @@ func finalizeBackupError(err error, logOutput, dbPassword string) (error, string
 }
 
 // performBackup runs the server's configured engine's dump command over SSH
-// (RN-BACKUP-008: shell-quoted via scheduler.BuildDumpPlan, the same builder
-// used by the scheduler's executor.go) and streams it into the server's
-// storage backend, without ever touching local disk. It returns the blob
+// or, when connectionMode=local, in this process (RN-BACKUP-038). The command
+// is shell-quoted via scheduler.BuildDumpPlan (RN-BACKUP-008), the same
+// builder used by the scheduler's executor.go, and streamed into the server's
+// storage backend without ever touching local disk. It returns the blob
 // name, its size, and timing for both stages.
 func (h *BackupHandlers) performBackup(ctx context.Context, server domain.Server, backend storage.Backend) (blobName string, blobSizeBytes int64, dumpDurationMS, uploadDurationMS int, logOutput string, err error) {
 	// dbPassword is declared up front so the deferred call below can close
@@ -212,9 +212,13 @@ func (h *BackupHandlers) performBackup(ctx context.Context, server domain.Server
 		err, logOutput = finalizeBackupError(err, logOutput, dbPassword)
 	}()
 
-	privateKeyPEMStr, err := h.Sealer.Decrypt(server.ID, "ssh_private_key_encrypted", server.SSHPrivateKeyEncrypted)
-	if err != nil {
-		return "", 0, 0, 0, "", fmt.Errorf("decrypt ssh private key: %w", err)
+	var privateKeyPEM []byte
+	if server.ConnectionMode != domain.ConnectionModeLocal {
+		privateKeyPEMStr, decErr := h.Sealer.Decrypt(server.ID, "ssh_private_key_encrypted", server.SSHPrivateKeyEncrypted)
+		if decErr != nil {
+			return "", 0, 0, 0, "", fmt.Errorf("decrypt ssh private key: %w", decErr)
+		}
+		privateKeyPEM = []byte(privateKeyPEMStr)
 	}
 
 	if server.DBPasswordEncrypted != nil {
@@ -227,14 +231,7 @@ func (h *BackupHandlers) performBackup(ctx context.Context, server domain.Server
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	host := fmt.Sprintf("%s:%d", server.Host, server.Port)
-	client, _, err := sshclient.Connect(connectCtx, sshclient.ConnectOptions{
-		User:              server.SSHUser,
-		Host:              host,
-		PrivateKeyPEM:     []byte(privateKeyPEMStr),
-		Timeout:           30 * time.Second,
-		ExpectedHostKeyFP: server.SSHHostKeyFingerprint,
-	})
+	client, _, err := scheduler.OpenCommandRunner(connectCtx, server, privateKeyPEM)
 	if err != nil {
 		return "", 0, 0, 0, "", fmt.Errorf("ssh connect: %w", err)
 	}

@@ -49,10 +49,10 @@
             <span class="font-medium text-gray-800">{{ server.name }}</span>
           </td>
           <td class="border border-gray-300 px-4 py-3 text-gray-600">
-            {{ server.host }}
+            {{ server.connectionMode === 'local' ? 'localhost' : server.host }}
           </td>
           <td class="border border-gray-300 px-4 py-3 text-gray-600">
-            {{ server.port }}
+            {{ server.connectionMode === 'local' ? '—' : server.port }}
           </td>
           <td class="border border-gray-300 px-4 py-3">
             <span
@@ -125,6 +125,7 @@ function statusLabel(status: string): string {
     {
       pending_key: 'Aguardando Chave',
       awaiting_authorization: 'Aguardando Autorização',
+      pending_local: 'Aguardando teste local',
       ready: 'Pronto',
     }[status] || status
   )
@@ -145,6 +146,7 @@ function statusBadgeClass(status: string): string {
   const classes: Record<string, string> = {
     pending_key: 'bg-yellow-100 text-yellow-800',
     awaiting_authorization: 'bg-orange-100 text-orange-800',
+    pending_local: 'bg-yellow-100 text-yellow-800',
     ready: 'bg-green-100 text-green-800',
   }
 

@@ -46,6 +46,9 @@ services:
       retries: 3
     networks:
       - internal
+    # Host Docker socket for connectionMode=local. Do not mount over /app.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     # Do NOT mount a volume over /app — it shadows the image binary and keeps
     # an old /app/api forever (symptom: /api/health without "version",
     # POST /api/retention-sweep → 404). api/worker are stateless.
@@ -77,6 +80,8 @@ services:
     # 3) 10s delay between retries should allow healthy startup sequencing
     networks:
       - internal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     # Same rule as api: never mount over /app (shadows image binary).
     deploy:
       replicas: 1

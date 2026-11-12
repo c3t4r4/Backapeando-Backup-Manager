@@ -16,6 +16,7 @@ type ServerStatus string
 const (
 	ServerStatusPendingKey            ServerStatus = "pending_key"
 	ServerStatusAwaitingAuthorization ServerStatus = "awaiting_authorization"
+	ServerStatusPendingLocal          ServerStatus = "pending_local"
 	ServerStatusReady                 ServerStatus = "ready"
 	ServerStatusDisabled              ServerStatus = "disabled"
 )
@@ -112,15 +113,26 @@ const (
 	DeploymentModeHost   DeploymentMode = "host"
 )
 
-// Server is a registered backup target reachable over SSH.
-// SSHPrivateKeyEncrypted and DBPasswordEncrypted are never serialized back
-// to API responses.
+// ConnectionMode discriminates how commands reach the database host.
+// SSH dials a remote machine. Local runs the same shell command in the
+// API/worker process (Docker on this host, via the mounted socket).
+type ConnectionMode string
+
+const (
+	ConnectionModeSSH   ConnectionMode = "ssh"
+	ConnectionModeLocal ConnectionMode = "local"
+)
+
+// Server is a registered backup target. SSH fields are unused when
+// ConnectionMode is local. SSHPrivateKeyEncrypted and DBPasswordEncrypted
+// are never serialized back to API responses.
 type Server struct {
 	ID                     string
 	Name                   string
 	Host                   string
 	Port                   int
 	SSHUser                string
+	ConnectionMode         ConnectionMode
 	DBEngine               DBEngine
 	DeploymentMode         DeploymentMode
 	ContainerName          *string // required iff DeploymentMode == DeploymentModeDocker

@@ -35,9 +35,16 @@ export type DBEngine = 'postgres' | 'mysql' | 'sqlserver'
 export type DeploymentMode = 'docker' | 'host'
 
 /**
+ * How dump commands reach the database host. `local` runs them in the
+ * Backapeando process against the host Docker socket, without SSH.
+ */
+export type ConnectionMode = 'ssh' | 'local'
+
+/**
  * Server (remote database instance) DTO
  * Represents a single database server to be backed up
- * Status machine: pending_key → awaiting_authorization → ready
+ * Status machine: pending_key → awaiting_authorization → ready.
+ * Local servers start at pending_local and skip the SSH states.
  */
 export interface ServerDTO {
   id: string
@@ -45,6 +52,7 @@ export interface ServerDTO {
   host: string
   port: number
   sshUser: string
+  connectionMode?: ConnectionMode
   dbEngine: DBEngine
   deploymentMode: DeploymentMode
   containerName?: string // present only when deploymentMode='docker'
@@ -61,7 +69,7 @@ export interface ServerDTO {
   storageTargetId?: string
   cronExpression: string
   enabled: boolean
-  status: 'pending_key' | 'awaiting_authorization' | 'ready'
+  status: 'pending_key' | 'awaiting_authorization' | 'pending_local' | 'ready'
   lastTestConnectionError?: string
   /** Success blobs still present in storage (excludes purged). */
   retainedBackupCount?: number
@@ -78,8 +86,10 @@ export interface ServerDTO {
 export interface UpsertServerRequest {
   name: string
   host: string
-  port?: number // defaults to 22
+  port?: number // defaults to 22; 0 when connectionMode is local
   sshUser: string
+  /** Omitted means ssh, matching servers created before this field existed. */
+  connectionMode?: ConnectionMode
   dbEngine: DBEngine
   deploymentMode: DeploymentMode
   containerName?: string // required when deploymentMode='docker', omitted otherwise
@@ -139,6 +149,8 @@ export interface BackupRunListResponse {
 export interface CheckResult {
   ok: boolean
   error?: string
+  /** Set on a passing local SSH check: execution did not use SSH. */
+  detail?: string
 }
 
 /**

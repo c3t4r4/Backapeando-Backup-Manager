@@ -33,7 +33,28 @@
         />
       </div>
 
-      <div class="mb-4 grid grid-cols-3 gap-4">
+      <div class="mb-4">
+        <label class="block text-gray-700 font-bold mb-2 text-sm">
+          Acesso
+        </label>
+        <Select v-model="connectionMode" :disabled="loading">
+          <SelectTrigger data-testid="connection-mode-select">
+            <SelectValue placeholder="Acesso" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ssh">SSH</SelectItem>
+            <SelectItem value="local">Localhost</SelectItem>
+          </SelectContent>
+        </Select>
+        <p
+          v-if="connectionMode === 'local'"
+          class="text-gray-500 text-xs mt-1"
+        >
+          O backup roda neste servidor, pelo Docker local. Não usa SSH.
+        </p>
+      </div>
+
+      <div v-if="connectionMode === 'ssh'" class="mb-4 grid grid-cols-3 gap-4">
         <div class="col-span-2">
           <label for="host" class="block text-gray-700 font-bold mb-2 text-sm">
             Host
@@ -64,7 +85,7 @@
         </div>
       </div>
 
-      <div class="mb-4">
+      <div v-if="connectionMode === 'ssh'" class="mb-4">
         <label for="sshUser" class="block text-gray-700 font-bold mb-2 text-sm">
           Usuário SSH
         </label>
@@ -99,7 +120,10 @@
           <label class="block text-gray-700 font-bold mb-2 text-sm">
             Onde o Banco Roda
           </label>
-          <Select v-model="deploymentMode" :disabled="loading">
+          <Select
+            v-model="deploymentMode"
+            :disabled="loading || connectionMode === 'local'"
+          >
             <SelectTrigger data-testid="deployment-mode-select">
               <SelectValue placeholder="Onde o banco roda" />
             </SelectTrigger>
@@ -329,7 +353,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '@/api'
 import type {
@@ -338,6 +362,7 @@ import type {
   UpsertServerRequest,
   DBEngine,
   DeploymentMode,
+  ConnectionMode,
 } from '@/api'
 import { buildDumpCommandPreview } from '@/lib/dumpCommand'
 import {
@@ -352,6 +377,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 const router = useRouter()
 
 const name = ref('')
+const connectionMode = ref<ConnectionMode>('ssh')
 const host = ref('')
 const port = ref(22)
 const sshUser = ref('')
@@ -370,6 +396,12 @@ const cronExpression = ref('0 3 * * *')
 const storageTargets = ref<StorageTargetDTO[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+watch(connectionMode, (mode) => {
+  if (mode === 'local') {
+    deploymentMode.value = 'docker'
+  }
+})
 
 const dumpPreview = computed(() =>
   buildDumpCommandPreview({
@@ -416,13 +448,15 @@ async function handleSubmit(): Promise<void> {
   loading.value = true
   error.value = null
 
+  const local = connectionMode.value === 'local'
   const req: UpsertServerRequest = {
     name: name.value,
-    host: host.value,
-    port: port.value,
-    sshUser: sshUser.value,
+    connectionMode: connectionMode.value,
+    host: local ? 'localhost' : host.value,
+    port: local ? 0 : port.value,
+    sshUser: local ? '' : sshUser.value,
     dbEngine: dbEngine.value,
-    deploymentMode: deploymentMode.value,
+    deploymentMode: local ? 'docker' : deploymentMode.value,
     containerName:
       deploymentMode.value === 'docker' ? containerName.value : undefined,
     dbName: dbName.value,

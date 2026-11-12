@@ -29,8 +29,9 @@ import { Select } from '@/components/ui/select'
  * Reka-ui's Select relies on real pointer capture/focus semantics that
  * happy-dom does not implement, so tests interact with it the same way the
  * template's v-model does: by emitting `update:modelValue` directly on the
- * `Select` component instance. `index` follows DOM order: 0 = motor do banco
- * (dbEngine), 1 = onde o banco roda (deploymentMode).
+ * `Select` component instance. `index` follows DOM order: 0 = acesso
+ * (connectionMode), 1 = motor do banco (dbEngine), 2 = onde o banco roda
+ * (deploymentMode).
  */
 async function setSelectValue(
   wrapper: VueWrapper,
@@ -788,7 +789,7 @@ describe('ServerEditView', () => {
       const { wrapper } = await mountServerEditView()
       await flushPromises()
 
-      await setSelectValue(wrapper, 0, 'mysql')
+      await setSelectValue(wrapper, 1, 'mysql')
 
       expect(
         wrapper.find('[data-testid="mysql-dump-extra-args-input"]').exists()
@@ -806,7 +807,7 @@ describe('ServerEditView', () => {
       const { wrapper } = await mountServerEditView()
       await flushPromises()
 
-      await setSelectValue(wrapper, 1, 'host')
+      await setSelectValue(wrapper, 2, 'host')
 
       expect(
         wrapper.find('[data-testid="container-name-input"]').exists()
@@ -875,5 +876,34 @@ describe('ServerEditView', () => {
         .join('\n')
       expect(previewAfterTyping).not.toContain('a-real-secret-value')
     })
+  })
+
+  it('hides SSH fields and key actions for a local server', async () => {
+    const api = await import('@/api')
+    vi.mocked(api.getServer).mockResolvedValue({
+      ...mockServer,
+      connectionMode: 'local',
+      host: 'localhost',
+      port: 0,
+      sshUser: '',
+      status: 'pending_local',
+      sshPublicKey: undefined,
+    })
+    vi.mocked(api.getStorageTargets).mockResolvedValue([])
+
+    const { wrapper } = await mountServerEditView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="host-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="ssh-user-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="regenerate-key-button"]').exists()).toBe(
+      false
+    )
+    expect(wrapper.find('[data-testid="reset-host-key-button"]').exists()).toBe(
+      false
+    )
+    expect(wrapper.find('[data-testid="disable-server-button"]').exists()).toBe(
+      true
+    )
   })
 })

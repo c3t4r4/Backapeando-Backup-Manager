@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"backapeando-backup-manager/internal/cmdrun"
 	"backapeando-backup-manager/internal/sshclient"
 )
 
@@ -48,10 +49,10 @@ func parseContainerMatches(stdout string, exitCode int, partial string) (string,
 }
 
 // ResolveContainerName resolves a partial container name (RN-BACKUP-023) into
-// the exact, currently running container name, by grepping the remote
-// "docker ps" output over the already-connected SSH session.
-func ResolveContainerName(ctx context.Context, client *sshclient.Client, partial string) (string, error) {
-	stdout, _, exitCode, err := client.RunCommand(ctx, buildResolveContainerCommand(partial))
+// the exact, currently running container name, by grepping "docker ps".
+// runner is the SSH session or the local process, depending on connection mode.
+func ResolveContainerName(ctx context.Context, runner cmdrun.Runner, partial string) (string, error) {
+	stdout, _, exitCode, err := runner.RunCommand(ctx, buildResolveContainerCommand(partial))
 	if err != nil {
 		return "", fmt.Errorf("resolve container name: %w", err)
 	}

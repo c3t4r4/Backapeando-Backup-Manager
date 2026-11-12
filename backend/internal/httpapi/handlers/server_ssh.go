@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"backapeando-backup-manager/internal/cmdrun"
 	"backapeando-backup-manager/internal/domain"
 	"backapeando-backup-manager/internal/repository"
 	"backapeando-backup-manager/internal/scheduler"
 	"backapeando-backup-manager/internal/sshclient"
-	"backapeando-backup-manager/internal/sshkeys"
 	"backapeando-backup-manager/internal/storage"
 )
 
@@ -28,8 +28,9 @@ func sanitizeSSHTestError(err error) string {
 
 // checkResult is one component of a combined test-connection check.
 type checkResult struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // testConnectionChecks is the per-component breakdown returned alongside
@@ -89,54 +90,59 @@ func (h *ServerHandlers) TestConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Server must have SSH key material to test
-	if server.SSHPrivateKeyEncrypted == nil || server.SSHPublicKey == nil {
-		writeError(w, http.StatusBadRequest, "server has no SSH key pair")
-		return
-	}
-
-	// Decrypt private key
-	privateKeyPEMStr, err := h.Sealer.Decrypt(id, "ssh_private_key_encrypted", server.SSHPrivateKeyEncrypted)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to decrypt SSH private key")
-		return
-	}
-	privateKeyPEM := []byte(privateKeyPEMStr)
-
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
 	var checks testConnectionChecks
+	var runner cmdrun.Runner
 
-	host := fmt.Sprintf("%s:%d", server.Host, server.Port)
-	opts := sshclient.ConnectOptions{
-		User:              server.SSHUser,
-		Host:              host,
-		PrivateKeyPEM:     privateKeyPEM,
-		Timeout:           30 * time.Second,
-		ExpectedHostKeyFP: server.SSHHostKeyFingerprint,
-	}
-
-	client, observedHostKeyFP, sshErr := sshclient.Connect(ctx, opts)
-	if sshErr != nil {
-		if h.Logger != nil {
-			h.Logger.ErrorContext(ctx, "SSH connection failed", slog.String("serverId", id), slog.String("error", sshErr.Error()))
+	if server.ConnectionMode == domain.ConnectionModeLocal {
+		checks.SSH = checkResult{OK: true, Detail: "execução local, SSH não utilizado"}
+		localRunner, _, openErr := scheduler.OpenCommandRunner(ctx, server, nil)
+		if openErr != nil {
+			checks.SSH = checkResult{OK: false, Error: "local execution unavailable"}
+			checks.DumpTool = checkResult{OK: false, Error: "not attempted: local runner failed"}
+		} else {
+			runner = localRunner
+			defer runner.Close()
+			checks.DumpTool = h.checkDumpTool(ctx, runner, server)
 		}
-		checks.SSH = checkResult{OK: false, Error: sanitizeSSHTestError(sshErr)}
-		checks.DumpTool = checkResult{OK: false, Error: "not attempted: SSH connection failed"}
 	} else {
-		defer client.Close()
-		checks.SSH = checkResult{OK: true}
-
-		// Store the observed host key fingerprint if this is first time (TOFU)
-		if server.SSHHostKeyFingerprint == nil && observedHostKeyFP != nil {
-			if err := h.Servers.SetHostKeyFingerprint(r.Context(), id, *observedHostKeyFP); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to store host key fingerprint")
-				return
-			}
+		// Server must have SSH key material to test
+		if server.SSHPrivateKeyEncrypted == nil || server.SSHPublicKey == nil {
+			writeError(w, http.StatusBadRequest, "server has no SSH key pair")
+			return
 		}
 
-		checks.DumpTool = h.checkDumpTool(ctx, client, server)
+		privateKeyPEMStr, err := h.Sealer.Decrypt(id, "ssh_private_key_encrypted", server.SSHPrivateKeyEncrypted)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to decrypt SSH private key")
+			return
+		}
+
+		host := fmt.Sprintf("%s:%d", server.Host, server.Port)
+		client, observedHostKeyFP, sshErr := scheduler.OpenCommandRunner(ctx, server, []byte(privateKeyPEMStr))
+		if sshErr != nil {
+			if h.Logger != nil {
+				h.Logger.ErrorContext(ctx, "SSH connection failed", slog.String("serverId", id), slog.String("host", host), slog.String("error", sshErr.Error()))
+			}
+			checks.SSH = checkResult{OK: false, Error: sanitizeSSHTestError(sshErr)}
+			checks.DumpTool = checkResult{OK: false, Error: "not attempted: SSH connection failed"}
+		} else {
+			runner = client
+			defer runner.Close()
+			checks.SSH = checkResult{OK: true}
+
+			// Store the observed host key fingerprint if this is first time (TOFU)
+			if server.SSHHostKeyFingerprint == nil && observedHostKeyFP != nil {
+				if err := h.Servers.SetHostKeyFingerprint(r.Context(), id, *observedHostKeyFP); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to store host key fingerprint")
+					return
+				}
+			}
+
+			checks.DumpTool = h.checkDumpTool(ctx, runner, server)
+		}
 	}
 
 	// Storage check — independent of the SSH result, only when configured.
@@ -159,8 +165,9 @@ func (h *ServerHandlers) TestConnection(w http.ResponseWriter, r *http.Request) 
 	var testErrorForDB *string
 	if allOK {
 		newStatus = domain.ServerStatusReady
-		if server.Status == domain.ServerStatusAwaitingAuthorization {
-			// First successful transition: auto-enable (RN-BACKUP-005)
+		if server.Status == domain.ServerStatusAwaitingAuthorization || server.Status == domain.ServerStatusPendingLocal {
+			// First successful transition: auto-enable (RN-BACKUP-005).
+			// pending_local is the local-mode equivalent of awaiting_authorization.
 			shouldEnable = true
 		}
 		var bootstrapErr error
@@ -201,7 +208,7 @@ func (h *ServerHandlers) TestConnection(w http.ResponseWriter, r *http.Request) 
 // running; when deploymentMode=host there is no container to inspect, so it
 // confirms the engine's dump binary is reachable on the remote host's PATH
 // instead.
-func (h *ServerHandlers) checkDumpTool(ctx context.Context, client *sshclient.Client, server domain.Server) checkResult {
+func (h *ServerHandlers) checkDumpTool(ctx context.Context, client cmdrun.Runner, server domain.Server) checkResult {
 	if server.DeploymentMode == domain.DeploymentModeDocker {
 		if _, err := scheduler.ResolveContainerName(ctx, client, *server.ContainerName); err != nil {
 			if h.Logger != nil {
@@ -284,7 +291,7 @@ func (h *ServerHandlers) checkStorageTarget(ctx context.Context, serverID, stora
 // RegenerateKey generates a new SSH key pair, stores it, and resets the server to awaiting_authorization.
 func (h *ServerHandlers) RegenerateKey(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_, err := h.Servers.Get(r.Context(), id)
+	server, err := h.Servers.Get(r.Context(), id)
 	if errors.Is(err, repository.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
@@ -293,25 +300,13 @@ func (h *ServerHandlers) RegenerateKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-
-	// Generate new SSH key pair
-	privateKeyPEM, publicKeyOpenSSH, fingerprint, err := sshkeys.GenerateKeyPair()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate SSH key pair")
+	if server.ConnectionMode == domain.ConnectionModeLocal {
+		writeError(w, http.StatusBadRequest, "SSH key operations are not available when connectionMode=local")
 		return
 	}
 
-	// Encrypt private key
-	encryptedPrivateKey, err := h.Sealer.Encrypt(id, "ssh_private_key_encrypted", string(privateKeyPEM))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encrypt SSH private key")
-		return
-	}
-
-	// Store encrypted key and public key (transitions back to awaiting_authorization, disables enabled)
-	publicKeyStr := string(publicKeyOpenSSH)
-	if err := h.Servers.SetSSHKeyPair(r.Context(), id, encryptedPrivateKey, publicKeyStr, fingerprint); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to store SSH key pair")
+	if msg, keyErr := h.generateAndStoreSSHKey(r.Context(), id); keyErr != nil {
+		writeError(w, http.StatusInternalServerError, msg)
 		return
 	}
 
@@ -366,13 +361,17 @@ func (h *ServerHandlers) setEnabled(w http.ResponseWriter, r *http.Request, enab
 // ResetHostKey clears the pinned SSH host key fingerprint (TOFU reset).
 func (h *ServerHandlers) ResetHostKey(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_, err := h.Servers.Get(r.Context(), id)
+	server, err := h.Servers.Get(r.Context(), id)
 	if errors.Is(err, repository.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if server.ConnectionMode == domain.ConnectionModeLocal {
+		writeError(w, http.StatusBadRequest, "SSH key operations are not available when connectionMode=local")
 		return
 	}
 

@@ -1,6 +1,8 @@
 # Backapeando Backup Manager
 
-Sistema de gestão de backups de bancos de dados PostgreSQL via SSH com retenção configurável (GFS), upload para múltiplos destinos de armazenamento (Azure Blob Storage, S3-compatível, filesystem/NFS), e interface web para automação.
+Sistema de gestão de backups de bancos de dados PostgreSQL via SSH, com retenção configurável (GFS), upload para múltiplos destinos de armazenamento (Azure Blob Storage, S3-compatível, filesystem/NFS), e interface web para automação.
+
+No cadastro do servidor o acesso pode ser SSH ou Localhost. Localhost copia um container Docker na mesma máquina, sem chave SSH: a API e o worker executam `docker exec` pelo socket `/var/run/docker.sock`. Esse modo só vale com o banco em container. Sem rebuild da imagem e redeploy do stack, o modo local não existe em produção.
 
 ## System Architecture
 
@@ -65,6 +67,8 @@ backend/
     storage/       # Storage abstraction layer
     sshclient/     # SSH client + TOFU host key pinning
     sshkeys/       # SSH key generation (ed25519)
+    cmdrun/        # shared command runner interface
+    localexec/     # local sh -c runner (connectionMode=local)
 
 frontend/
   src/
@@ -366,3 +370,9 @@ For issues or questions, see:
 - [`docs/Memoria.md`](./docs/Memoria.md) — Known issues & solutions
 - [`docs/Progresso.md`](./docs/Progresso.md) — Project status
 - Issue tracker (GitHub Issues)
+
+## Histórico
+
+| Data | Alteração |
+| --- | --- |
+| 2026-11-12 | O propósito passa a citar acesso Localhost: dump de container Docker no mesmo host, via socket, sem chave SSH. |

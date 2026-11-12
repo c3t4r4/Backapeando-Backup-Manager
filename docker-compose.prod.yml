@@ -82,6 +82,8 @@ services:
     networks:
       - backapeando_backend
       - backapeando_ingress
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     deploy:
       mode: replicated
       replicas: 3 # Adjust based on traffic
@@ -135,6 +137,8 @@ services:
       - master_encryption_key
     networks:
       - backapeando_backend
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     deploy:
       mode: replicated
       replicas: 1 # Safe to scale later: scheduling uses SKIP LOCKED

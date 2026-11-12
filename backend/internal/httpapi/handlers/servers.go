@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -39,6 +40,7 @@ type serverDTO struct {
 	Host                    string     `json:"host"`
 	Port                    int        `json:"port"`
 	SSHUser                 string     `json:"sshUser"`
+	ConnectionMode          string     `json:"connectionMode"`
 	DBEngine                string     `json:"dbEngine"`
 	DeploymentMode          string     `json:"deploymentMode"`
 	ContainerName           *string    `json:"containerName,omitempty"`
@@ -71,7 +73,8 @@ func toServerDTO(s domain.Server) serverDTO {
 func toServerDTOWithStats(s domain.Server, stats domain.RetainedBackupStats) serverDTO {
 	return serverDTO{
 		ID: s.ID, Name: s.Name, Host: s.Host, Port: s.Port, SSHUser: s.SSHUser,
-		DBEngine: string(s.DBEngine), DeploymentMode: string(s.DeploymentMode),
+		ConnectionMode: connectionModeOrSSH(s.ConnectionMode),
+		DBEngine:       string(s.DBEngine), DeploymentMode: string(s.DeploymentMode),
 		ContainerName: s.ContainerName, DBName: s.DBName, DBUser: s.DBUser,
 		HasDBPassword:      s.DBPasswordEncrypted != nil,
 		PgDumpExtraArgs:    s.PgDumpExtraArgs,
@@ -93,6 +96,7 @@ type upsertServerRequest struct {
 	Host               string  `json:"host"`
 	Port               int     `json:"port"`
 	SSHUser            string  `json:"sshUser"`
+	ConnectionMode     string  `json:"connectionMode"`
 	DBEngine           string  `json:"dbEngine"`
 	DeploymentMode     string  `json:"deploymentMode"`
 	ContainerName      string  `json:"containerName"`
@@ -113,15 +117,53 @@ type upsertServerRequest struct {
 // false — i.e. always on Create, and on Update only when the server has no
 // password already stored (an empty dbPassword on Update otherwise means
 // "keep the current one", RN-BACKUP-019).
+// applyConnectionDefaults fills omitted connectionMode with ssh and, for
+// local mode, the stored host/port/user placeholders. SSH mode with port 0
+// keeps the historical default of 22.
+func (req *upsertServerRequest) applyConnectionDefaults() {
+	if strings.TrimSpace(req.ConnectionMode) == "" {
+		req.ConnectionMode = string(domain.ConnectionModeSSH)
+	}
+	if req.ConnectionMode == string(domain.ConnectionModeLocal) {
+		req.Host = "localhost"
+		req.Port = 0
+		req.SSHUser = ""
+		return
+	}
+	if req.Port == 0 {
+		req.Port = 22
+	}
+}
+
+func connectionModeOrSSH(mode domain.ConnectionMode) string {
+	if mode == "" {
+		return string(domain.ConnectionModeSSH)
+	}
+	return string(mode)
+}
+
 func (req upsertServerRequest) validate(hasExistingPassword bool) error {
 	if strings.TrimSpace(req.Name) == "" {
 		return errors.New("name is required")
 	}
-	if strings.TrimSpace(req.Host) == "" {
-		return errors.New("host is required")
-	}
-	if strings.TrimSpace(req.SSHUser) == "" {
-		return errors.New("sshUser is required")
+
+	switch domain.ConnectionMode(req.ConnectionMode) {
+	case domain.ConnectionModeSSH:
+		if strings.TrimSpace(req.Host) == "" {
+			return errors.New("host is required")
+		}
+		if strings.TrimSpace(req.SSHUser) == "" {
+			return errors.New("sshUser is required")
+		}
+		if req.Port <= 0 || req.Port > 65535 {
+			return errors.New("port must be between 1 and 65535")
+		}
+	case domain.ConnectionModeLocal:
+		if domain.DeploymentMode(req.DeploymentMode) != domain.DeploymentModeDocker {
+			return errors.New("deploymentMode must be docker when connectionMode=local")
+		}
+	default:
+		return errors.New("connectionMode must be one of ssh, local")
 	}
 
 	switch domain.DBEngine(req.DBEngine) {
@@ -157,9 +199,6 @@ func (req upsertServerRequest) validate(hasExistingPassword bool) error {
 	}
 	if !containerNameRegex.MatchString(req.DBUser) {
 		return errors.New("dbUser must start with alphanumeric and contain only alphanumeric, underscore, dot, or hyphen")
-	}
-	if req.Port <= 0 || req.Port > 65535 {
-		return errors.New("port must be between 1 and 65535")
 	}
 
 	if req.DBEngine != string(domain.DBEnginePostgres) && !hasExistingPassword && strings.TrimSpace(req.DBPassword) == "" {
@@ -210,9 +249,6 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Port == 0 {
-		req.Port = 22
-	}
 	if req.CronExpression == "" {
 		req.CronExpression = "0 3 * * *"
 	}
@@ -222,6 +258,7 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	if req.DeploymentMode == "" {
 		req.DeploymentMode = string(domain.DeploymentModeDocker)
 	}
+	req.applyConnectionDefaults()
 	if err := req.validate(false); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -249,9 +286,16 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	mode := domain.ConnectionMode(req.ConnectionMode)
+	status := domain.ServerStatusPendingKey
+	if mode == domain.ConnectionModeLocal {
+		status = domain.ServerStatusPendingLocal
+	}
+
 	created, err := h.Servers.Create(r.Context(), domain.Server{
 		ID: id, Name: req.Name, Host: req.Host, Port: req.Port, SSHUser: req.SSHUser,
-		DBEngine: domain.DBEngine(req.DBEngine), DeploymentMode: domain.DeploymentMode(req.DeploymentMode),
+		ConnectionMode: mode,
+		DBEngine:       domain.DBEngine(req.DBEngine), DeploymentMode: domain.DeploymentMode(req.DeploymentMode),
 		ContainerName: containerName, DBName: req.DBName, DBUser: req.DBUser,
 		DBPasswordEncrypted: encryptedPassword,
 		PgDumpExtraArgs:     req.PgDumpExtraArgs, MySQLDumpExtraArgs: req.MySQLDumpExtraArgs,
@@ -259,41 +303,68 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		// RN-BACKUP-034: immutable storage folder; never updated on rename.
 		BlobPrefix:     backupcore.Slugify(req.Name),
 		CronExpression: req.CronExpression,
+		Status:         status,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	// Generate SSH key pair
-	privateKeyPEM, publicKeyOpenSSH, fingerprint, err := sshkeys.GenerateKeyPair()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate SSH key pair")
-		return
-	}
-
-	// Encrypt private key
-	encryptedPrivateKey, err := h.Sealer.Encrypt(created.ID, "ssh_private_key_encrypted", string(privateKeyPEM))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encrypt SSH private key")
-		return
-	}
-
-	// Store encrypted key and public key in database
-	publicKeyStr := string(publicKeyOpenSSH)
-	if err := h.Servers.SetSSHKeyPair(r.Context(), created.ID, encryptedPrivateKey, publicKeyStr, fingerprint); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to store SSH key pair")
-		return
-	}
-
-	// Re-fetch to get updated fields
-	created, err = h.Servers.Get(r.Context(), created.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to retrieve created server")
-		return
+	if mode != domain.ConnectionModeLocal {
+		if msg, keyErr := h.generateAndStoreSSHKey(r.Context(), created.ID); keyErr != nil {
+			writeError(w, http.StatusInternalServerError, msg)
+			return
+		}
+		created, err = h.Servers.Get(r.Context(), created.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to retrieve created server")
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, toServerDTO(created))
+}
+
+// generateAndStoreSSHKey creates an ed25519 pair, encrypts the private key,
+// and moves the server to awaiting_authorization with enabled=false.
+// The returned message is safe to send to the client.
+func (h *ServerHandlers) generateAndStoreSSHKey(ctx context.Context, serverID string) (string, error) {
+	privateKeyPEM, publicKeyOpenSSH, fingerprint, err := sshkeys.GenerateKeyPair()
+	if err != nil {
+		return "failed to generate SSH key pair", err
+	}
+	encryptedPrivateKey, err := h.Sealer.Encrypt(serverID, "ssh_private_key_encrypted", string(privateKeyPEM))
+	if err != nil {
+		return "failed to encrypt SSH private key", err
+	}
+	if err := h.Servers.SetSSHKeyPair(ctx, serverID, encryptedPrivateKey, string(publicKeyOpenSSH), fingerprint); err != nil {
+		return "failed to store SSH key pair", err
+	}
+	return "", nil
+}
+
+// resetAfterConnectionModeChange drops a server out of ready when the
+// operator switches between SSH and local. The previous test no longer
+// proves the new path works, so scheduling stays off until the next
+// successful test-connection. Switching to SSH generates a key when the
+// server never had one (it was created as local).
+func (h *ServerHandlers) resetAfterConnectionModeChange(ctx context.Context, existing domain.Server, newMode domain.ConnectionMode) error {
+	if newMode == domain.ConnectionModeLocal {
+		if err := h.Servers.SetStatusAndEnabled(ctx, existing.ID, domain.ServerStatusPendingLocal, false); err != nil {
+			return errors.New("internal server error")
+		}
+		return nil
+	}
+	if existing.SSHPrivateKeyEncrypted == nil || existing.SSHPublicKey == nil {
+		if msg, err := h.generateAndStoreSSHKey(ctx, existing.ID); err != nil {
+			return errors.New(msg)
+		}
+		return nil
+	}
+	if err := h.Servers.SetStatusAndEnabled(ctx, existing.ID, domain.ServerStatusAwaitingAuthorization, false); err != nil {
+		return errors.New("internal server error")
+	}
+	return nil
 }
 
 // recomputeNextRunAtOnCronChange returns the next_run_at to persist after a
@@ -332,9 +403,7 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Port == 0 {
-		req.Port = 22
-	}
+	req.applyConnectionDefaults()
 	if err := req.validate(existing.DBPasswordEncrypted != nil); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -345,8 +414,15 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		containerName = &req.ContainerName
 	}
 
+	oldMode := existing.ConnectionMode
+	if oldMode == "" {
+		oldMode = domain.ConnectionModeSSH
+	}
+	newMode := domain.ConnectionMode(req.ConnectionMode)
+
 	existing.Name, existing.Host, existing.Port = req.Name, req.Host, req.Port
-	existing.SSHUser, existing.ContainerName = req.SSHUser, containerName
+	existing.SSHUser, existing.ConnectionMode = req.SSHUser, newMode
+	existing.ContainerName = containerName
 	existing.DBEngine, existing.DeploymentMode = domain.DBEngine(req.DBEngine), domain.DeploymentMode(req.DeploymentMode)
 	existing.DBName, existing.DBUser = req.DBName, req.DBUser
 	existing.PgDumpExtraArgs = req.PgDumpExtraArgs
@@ -360,6 +436,13 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	if err := h.Servers.Update(r.Context(), existing); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+
+	if newMode != oldMode {
+		if err := h.resetAfterConnectionModeChange(r.Context(), existing, newMode); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	// RN-BACKUP-030: a cron change on a server that's already scheduled must

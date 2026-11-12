@@ -105,6 +105,28 @@ describe('ServerList', () => {
     expect(secondRowText).toContain('10.0.2.50')
   })
 
+  it('shows localhost for a server reached without SSH', () => {
+    const wrapper = mount(ServerList, {
+      props: {
+        servers: [
+          {
+            ...mockServers[0],
+            id: 'local-1',
+            name: 'Same Host',
+            connectionMode: 'local',
+            host: 'localhost',
+            port: 0,
+          },
+        ],
+      },
+    })
+
+    const rowText = wrapper.find('[data-testid="server-row-local-1"]').text()
+    expect(rowText).toContain('localhost')
+    expect(rowText).toContain('—')
+    expect(rowText).not.toContain('10.0.1.100')
+  })
+
   it('should show status badge with correct styling for ready status', () => {
     const wrapper = mount(ServerList, {
       props: {

@@ -20,8 +20,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags "-X main.Ve
 # Runtime stage: minimal Alpine image
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS (if needed)
-RUN apk --no-cache add ca-certificates
+# ca-certificates for HTTPS. docker-cli talks to the host daemon when a
+# server uses connectionMode=local. su-exec drops root after the entrypoint
+# joins appuser to the socket's group.
+RUN apk --no-cache add ca-certificates docker-cli su-exec
 
 # Create non-root user
 RUN addgroup -g 1000 appuser && \
@@ -29,14 +31,14 @@ RUN addgroup -g 1000 appuser && \
 
 # Copy binary from builder
 COPY --from=builder /app/api /app/api
+COPY docker-entrypoint.sh /docker-entrypoint.sh
 
 WORKDIR /app
 
-# Set ownership
-RUN chown -R appuser:appuser /app
+# Set ownership. The entrypoint starts as root and execs the binary as appuser.
+RUN chown -R appuser:appuser /app && chmod 755 /docker-entrypoint.sh
 
-# Switch to non-root user
-USER appuser
+ENTRYPOINT ["/docker-entrypoint.sh"]
 
 # Set timezone to America/Sao_Paulo for consistent cron scheduling.
 # The Go binary embeds tzdata via `import _ "time/tzdata"`, so this does not

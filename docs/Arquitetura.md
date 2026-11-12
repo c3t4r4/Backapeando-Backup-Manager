@@ -41,6 +41,8 @@ backend/
     repository/     # SQL manual com pgx
     sshkeys/        # geração ed25519 + fingerprint SHA256
     sshclient/      # SSH dial com TOFU + StreamCommand/RunCommand com timeout
+    cmdrun/         # interface RunCommand/StreamCommand compartilhada por SSH e local
+    localexec/      # execução local (sh -c) quando connectionMode=local
     storage/        # abstração de backend de armazenamento (azure/s3/filesystem)
     backupcore/     # retenção compartilhada, Slugify/FormatBackupBlobName, redact
     retention/       # algoritmo GFS puro (Decide/Sweep), sem I/O
@@ -78,21 +80,21 @@ docs/                      # documentação de governança
   duplicidade de execução entre réplicas via `SELECT ... FOR UPDATE SKIP
 LOCKED` (`Servers.GetReadyServersForScheduling`).
 - **Execução de backup** (`scheduler.BackupExecutor` + `scheduler.BuildDumpPlan`
-  em `dumpcommand.go`): decripta a chave SSH e a senha do banco (se
-  configurada), monta o backend de storage, conecta via SSH com TOFU, e
-  executa o comando de dump do engine configurado (`pg_dump`/`mysqldump`,
-  opcionalmente prefixado com `docker exec` conforme `deploymentMode`) com
-  streaming direto para o destino de armazenamento (sem arquivo
-  intermediário em disco, exceto SQL Server — ver abaixo). Roda a varredura
-  de retenção GFS ao final (não bloqueia sucesso do backup se falhar). A
-  mesma lógica de `BuildDumpPlan` é reaproveitada pelo endpoint síncrono
-  `POST /api/servers/{id}/backup-now` (`httpapi/handlers/backup.go`), que
-  antes tinha sua própria cópia da montagem do comando — consolidado nesta
-  tarefa para eliminar a duplicação.
+  em `dumpcommand.go`): decripta a senha do banco (se configurada) e, no modo
+  SSH, a chave. `scheduler.OpenCommandRunner` abre SSH com TOFU ou, quando
+  `connectionMode=local` (RN-BACKUP-038), um runner em `internal/localexec`
+  que roda a mesma string já quotada com `sh -c` neste processo. O comando de
+  dump do engine (`pg_dump`/`mysqldump`, opcionalmente prefixado com
+  `docker exec` conforme `deploymentMode`) vai em streaming direto para o
+  destino de armazenamento (sem arquivo intermediário em disco, exceto SQL
+  Server — ver abaixo). Roda a varredura de retenção GFS ao final (não
+  bloqueia sucesso do backup se falhar). A mesma lógica de `BuildDumpPlan` e
+  o mesmo `OpenCommandRunner` são usados pelo endpoint síncrono
+  `POST /api/servers/{id}/backup-now` (`httpapi/handlers/backup.go`).
 - **Resolução de container por nome parcial** (`scheduler.ResolveContainerName`,
   `containerresolve.go`): em modo `docker`, o `containerName` configurado é
   tratado como padrão parcial e resolvido a cada execução via
-  `docker ps --format '{{.Names}}' | grep` na sessão SSH já aberta —
+  `docker ps --format '{{.Names}}' | grep` no runner já aberto (SSH ou local) —
   `docker ps` sem `-a` só lista containers rodando, então uma única
   correspondência já confirma o estado "rodando" sem precisar de um
   `docker inspect` adicional. Zero ou múltiplas correspondências falham
@@ -173,7 +175,9 @@ flowchart LR
     Handlers -.-> Redis[("Redis — rate limit de login")]
     Worker["Worker (cmd/worker)"] --> Repos
     Worker --> SSH["SSH + TOFU → servidor remoto"]
+    Worker --> Local["localexec → socket Docker do host"]
     SSH --> Dump["pg_dump/mysqldump/sqlcmd (docker exec opcional, stream)"]
+    Local --> Dump
     Worker --> Storage["Backend de storage (Azure/S3/filesystem)"]
 ```
 
@@ -492,3 +496,4 @@ Antes de alterar:
 | 2026-09-16 | Backend            | Resolvido o item de "Pontos a definir" sobre `next_run_at` não recalculado ao editar cron: `ServerHandlers.Update` agora chama `recomputeNextRunAtOnCronChange` (reaproveita `scheduler.NextRunTime`) e novo `ServerRepo.RescheduleNextRunAt` (método dedicado, distinto de `UpdateNextRun` — não toca `last_scheduled_at`, achado do Validator durante esta mesma tarefa) quando `cronExpression` muda em um servidor já agendado                                                                                                        | — (extensão pontual, sem ADR novo)                  | Achado do Validator na tarefa anterior (RN-BACKUP-029, "Caso não previsto") — ver `docs/RegrasNegocio.md` RN-BACKUP-030, `.claude/plans/fa-a-a-analise-e-nested-llama.md`                                                                                    |
 | 2026-09-16 | Backend + Frontend | Novo endpoint `GET /api/dashboard/backup-stats` (`BackupRunRepo.CountAndBytesByDestination`, JOIN com `servers`/`storage_targets`); gráfico de linha do Dashboard substituído por 4 gráficos de barras empilhadas por destino; corrigido bug de timezone no `date_trunc` da nova query durante a implementação                                                                                                                                                                                                                            | ADR-007                                             | Usuário pediu que o gráfico do dashboard mostrasse backups e soma de dados por destino, últimos 30 dias e mês a mês do ano atual — ver `docs/RegrasNegocio.md` RN-BACKUP-031, `.claude/plans/Backapeando-2026-09-16-15-23-dashboard-graficos-por-destino.md` |
 | 2026-10-05 | Backend | `servers.blob_prefix` + `backupcore` (Slugify/FormatBackupBlobName/StoragePrefix/FailedDelete); naming HTTP=worker | — | RN-BACKUP-034; pendências pós-expurgo |
+| 2026-11-12 | Backend | `connection_mode` ssh/local, runner `localexec`, `OpenCommandRunner` na API e no worker. `docs/arquitetura.html` não foi reautorado: a skill archify gera um candidato novo, e o diagrama markdown deste arquivo já inclui o caminho local | — | RN-BACKUP-038 |

@@ -51,8 +51,9 @@ services:
       retries: 3
     networks:
       - internal
-    # volumes:
-    #   - ./backend:/app:cached  # live reload in development (with entr or similar) — comentado para build correto em Docker
+    # Host Docker socket: required only for servers with connectionMode=local.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
   # Backup scheduler worker (polls backup_runs / servers, executes backups)
@@ -75,6 +76,8 @@ services:
         condition: service_healthy
     networks:
       - internal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
   # Frontend (Nginx)

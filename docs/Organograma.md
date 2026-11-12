@@ -16,6 +16,8 @@ flowchart TD
     Repos --> DB[("PostgreSQL")]
     Worker["backend/cmd/worker (Scheduler)"] --> Repos
     Worker --> SSH["internal/sshclient (TOFU)"]
+    Worker --> LocalExec["internal/localexec (socket Docker)"]
+    API --> LocalExec
     Worker --> Storage["internal/storage (Azure/S3/filesystem)"]
     Worker --> Retention["internal/retention (GFS puro)"]
     API -.-> Redis[("Redis — rate limit")]
@@ -30,9 +32,12 @@ flowchart LR
     Cron(["Ciclo de polling do worker"]) --> Claim{"Servidor elegível?<br/>enabled=true, status=ready,<br/>storage_target_id != null"}
     Claim -->|"Sim (SKIP LOCKED)"| Create["Cria backup_run (running)"]
     Claim -->|"Não"| Fim1(["Aguarda próximo ciclo"])
-    Create --> SSHConn["SSH dial + TOFU"]
+    Create --> Runner{"connectionMode"}
+    Runner -->|ssh| SSHConn["SSH dial + TOFU"]
+    Runner -->|local| LocalConn["sh -c no processo, socket Docker"]
     SSHConn -->|"falha"| Failed(["backup_run = failed"])
     SSHConn -->|"sucesso"| Dump["pg_dump/mysqldump/sqlcmd (docker exec opcional, stream)"]
+    LocalConn --> Dump
     Dump --> Upload["Upload para storage target"]
     Upload -->|"falha"| Failed
     Upload -->|"sucesso"| Success(["backup_run = success"])
@@ -68,6 +73,7 @@ flowchart LR
     Sistema --> S3["S3 / compatível"]
     Sistema --> FS["Filesystem / NFS local"]
     Sistema --> SSHRemoto["Servidor de banco remoto — Postgres/MySQL/SQL Server (via SSH)"]
+    Sistema --> DockerLocal["Docker do mesmo host (socket, connectionMode=local)"]
     Sistema -.-> Redis["Redis (rate limit de login)"]
 ```
 
@@ -91,3 +97,4 @@ Antes de alterar:
 | 2026-09-15 | Todos os diagramas | Documento criado do zero a partir do código real, ausente antes desta tarefa | `/init-project --update` |
 | 2026-09-15 | Navegação de telas | Adicionados nós `/admin-users`, `/admin-users/new`, `/admin-users/:id/edit` | CRUD de usuário administrador solicitado pelo usuário |
 | 2026-09-15 | Fluxo de negócio principal, Integrações externas | Nó de dump generalizado de "docker exec pg_dump" para "pg_dump/mysqldump/sqlcmd (docker exec opcional)"; nó de integração generalizado de "Servidor PostgreSQL remoto" para "Servidor de banco remoto — Postgres/MySQL/SQL Server" | Suporte a MySQL/SQL Server e a bancos rodando direto no host, sem Docker |
+| 2026-11-12 | Módulos, fluxo de backup, integrações | Caminho `connectionMode=local`: API e worker executam o dump via `localexec` no socket Docker do host | RN-BACKUP-038 |

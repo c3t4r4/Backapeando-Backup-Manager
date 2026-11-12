@@ -40,13 +40,13 @@ Rotas isentas de autenticação/CSRF (`publicPaths` em `router.go`): `GET /healt
 | POST | `/api/auth/logout` | Logout, revoga sessão no servidor | Sim | — | Ativo |
 | GET | `/api/auth/me` | Sessão atual | Sim | — | Ativo |
 | GET | `/api/servers` | Lista servidores | Sim | — | Ativo |
-| POST | `/api/servers` | Cria servidor | Sim | RN-BACKUP-001, RN-BACKUP-017, RN-BACKUP-018 | Ativo |
+| POST | `/api/servers` | Cria servidor. `connectionMode` omitido = `ssh`. `local` não exige host/porta/usuário SSH, não gera chave e grava `status=pending_local`. `local` + `deploymentMode=host` → 400 | Sim | RN-BACKUP-001, RN-BACKUP-017, RN-BACKUP-018, RN-BACKUP-038 | Ativo |
 | GET | `/api/servers/{id}` | Detalhe do servidor | Sim | — | Ativo |
-| PUT | `/api/servers/{id}` | Atualiza servidor | Sim | RN-BACKUP-017, RN-BACKUP-018, RN-BACKUP-019 | Ativo |
+| PUT | `/api/servers/{id}` | Atualiza servidor. Trocar `connectionMode` volta o status ao inicial do modo novo e desliga `enabled` | Sim | RN-BACKUP-017, RN-BACKUP-018, RN-BACKUP-019, RN-BACKUP-038 | Ativo |
 | DELETE | `/api/servers/{id}` | Remove servidor | Sim | — | Ativo |
-| POST | `/api/servers/{id}/test-connection` | Test-connection combinado (SSH+Ferramenta de Dump+Storage) | Sim | RN-BACKUP-005, RN-BACKUP-013 | Ativo |
-| POST | `/api/servers/{id}/regenerate-key` | Gera novo par de chaves SSH | Sim | RN-BACKUP-001 | Ativo |
-| POST | `/api/servers/{id}/reset-host-key` | Limpa fingerprint TOFU fixado | Sim | RN-BACKUP-015 | Ativo |
+| POST | `/api/servers/{id}/test-connection` | Test-connection combinado. No modo local, `checks.ssh.ok=true` com `checks.ssh.detail` e o check da ferramenta de dump usa o runner local | Sim | RN-BACKUP-005, RN-BACKUP-013, RN-BACKUP-038 | Ativo |
+| POST | `/api/servers/{id}/regenerate-key` | Gera novo par de chaves SSH. Modo local → 400 | Sim | RN-BACKUP-001, RN-BACKUP-038 | Ativo |
+| POST | `/api/servers/{id}/reset-host-key` | Limpa fingerprint TOFU fixado. Modo local → 400 | Sim | RN-BACKUP-015, RN-BACKUP-038 | Ativo |
 | POST | `/api/servers/{id}/enable` | Ativa o servidor manualmente (`enabled=true`) | Sim | RN-BACKUP-024 | Ativo |
 | POST | `/api/servers/{id}/disable` | Desativa o servidor manualmente (`enabled=false`); só impede o agendamento automático | Sim | RN-BACKUP-024 | Ativo |
 | GET | `/api/servers/{id}/retention-policy` | Política de retenção do servidor | Sim | RN-BACKUP-003 | Ativo |
@@ -297,3 +297,4 @@ Antes de alterar:
 | 2026-10-05 | `POST /api/retention-sweep`, `GET /api/retention-sweep/latest` | Documentados formalmente; comportamento do worker corrigido (claim atômico, audit com `backup_run_id` NULL, `totalBlobsDeleted` real no summary) | Aditiva (documentação; contrato HTTP inalterado: 202 + poll) | RN-BACKUP-033; reincidência do 404 em produção era deploy, não path |
 | 2026-10-05 | `POST /api/servers/{id}/backup-now` resposta | `retention.failedDelete` passa a ser preenchido com os nomes dos blobs cujo delete falhou | Aditiva (campo já existia no contrato; agora efetivo) | Observabilidade da retenção parcial (RN-BACKUP-003) |
 | 2026-10-05 | `GET /api/servers`; `GET /api/servers/{id}/backup-runs` e `GET /api/backup-runs` | Servers list ganha `retainedBackupCount`/`retainedBackupBytes`; `BackupRunDTO` ganha `artifactPurged`; builder host Postgres injeta `-h localhost` (sem campo novo) | Aditiva | RN-BACKUP-035/036/037 |
+| 2026-11-12 | `POST`/`PUT /api/servers`, DTO de servidor, `POST .../test-connection`, `regenerate-key`, `reset-host-key` | Campo `connectionMode` (`ssh` default, ou `local`). Check SSH ganha `detail` opcional. Chave SSH em servidor local responde 400 | Aditiva para clientes que ignoram o campo; `local` é comportamento novo | RN-BACKUP-038 |

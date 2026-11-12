@@ -14,7 +14,6 @@ import (
 	"backapeando-backup-manager/internal/domain"
 	"backapeando-backup-manager/internal/repository"
 	"backapeando-backup-manager/internal/retention"
-	"backapeando-backup-manager/internal/sshclient"
 	"backapeando-backup-manager/internal/storage"
 )
 
@@ -77,16 +76,20 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 		return err
 	}
 
-	// Decrypt SSH private key
-	privateKeyPEM, err := e.sealer.Decrypt(server.ID, "ssh_private_key_encrypted", server.SSHPrivateKeyEncrypted)
-	if err != nil {
-		errMsg := backupcore.TruncateText(fmt.Sprintf("falha ao decriptar chave SSH: %s", err.Error()), backupcore.MaxStoredErrorLen)
-		e.logger.ErrorContext(ctx, "failed to decrypt SSH key",
-			slog.String("serverId", server.ID),
-			slog.String("error", errMsg),
-		)
-		_ = e.repos.BackupRuns.MarkFailedWithDetails(ctx, backupRun.ID, errMsg, nil)
-		return fmt.Errorf("decrypt ssh private key: %w", err)
+	// Decrypt SSH private key. Local mode never uses it (RN-BACKUP-038).
+	var privateKeyPEM []byte
+	if server.ConnectionMode != domain.ConnectionModeLocal {
+		decrypted, err := e.sealer.Decrypt(server.ID, "ssh_private_key_encrypted", server.SSHPrivateKeyEncrypted)
+		if err != nil {
+			errMsg := backupcore.TruncateText(fmt.Sprintf("falha ao decriptar chave SSH: %s", err.Error()), backupcore.MaxStoredErrorLen)
+			e.logger.ErrorContext(ctx, "failed to decrypt SSH key",
+				slog.String("serverId", server.ID),
+				slog.String("error", errMsg),
+			)
+			_ = e.repos.BackupRuns.MarkFailedWithDetails(ctx, backupRun.ID, errMsg, nil)
+			return fmt.Errorf("decrypt ssh private key: %w", err)
+		}
+		privateKeyPEM = []byte(decrypted)
 	}
 
 	// Build the storage backend for this target (decrypts whichever secret
@@ -102,29 +105,22 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 		return fmt.Errorf("build storage backend: %w", err)
 	}
 
-	// SSH dial with TOFU validation
+	// SSH dial with TOFU validation, or a local runner when connection mode is local.
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	host := fmt.Sprintf("%s:%d", server.Host, server.Port)
-	sshClient, _, err := sshclient.Connect(connectCtx, sshclient.ConnectOptions{
-		User:              server.SSHUser,
-		Host:              host,
-		PrivateKeyPEM:     []byte(privateKeyPEM),
-		Timeout:           30 * time.Second,
-		ExpectedHostKeyFP: server.SSHHostKeyFingerprint,
-	})
+	runner, _, err := OpenCommandRunner(connectCtx, *server, privateKeyPEM)
 	if err != nil {
 		errMsg := backupcore.TruncateText(fmt.Sprintf("falha na conexão SSH: %s", err.Error()), backupcore.MaxStoredErrorLen)
-		e.logger.ErrorContext(ctx, "SSH connection failed",
+		e.logger.ErrorContext(ctx, "command runner connection failed",
 			slog.String("serverId", server.ID),
-			slog.String("host", host),
+			slog.String("host", fmt.Sprintf("%s:%d", server.Host, server.Port)),
 			slog.String("error", errMsg),
 		)
 		_ = e.repos.BackupRuns.MarkFailedWithDetails(ctx, backupRun.ID, errMsg, nil)
 		return fmt.Errorf("ssh dial: %w", err)
 	}
-	defer sshClient.Close()
+	defer runner.Close()
 
 	// Decrypt the DB password, if one is configured (RN-BACKUP-017: required
 	// for mysql/sqlserver, optional for postgres).
@@ -146,7 +142,7 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 	// remote Docker daemon before building the dump command (RN-BACKUP-023).
 	dumpServer := *server
 	if server.DeploymentMode == domain.DeploymentModeDocker {
-		resolvedName, resolveErr := ResolveContainerName(ctx, sshClient, *server.ContainerName)
+		resolvedName, resolveErr := ResolveContainerName(ctx, runner, *server.ContainerName)
 		if resolveErr != nil {
 			errMsg := backupcore.TruncateText(backupcore.RedactSecret(fmt.Sprintf("falha ao resolver nome do container: %s", resolveErr.Error()), dbPassword), backupcore.MaxStoredErrorLen)
 			e.logger.ErrorContext(ctx, "failed to resolve container name",
@@ -184,7 +180,7 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 			// time the dump/upload finished.
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
-			if _, _, exitCode, cleanupErr := sshClient.RunCommand(cleanupCtx, plan.CleanupCmd); cleanupErr != nil || exitCode != 0 {
+			if _, _, exitCode, cleanupErr := runner.RunCommand(cleanupCtx, plan.CleanupCmd); cleanupErr != nil || exitCode != 0 {
 				e.logger.ErrorContext(ctx, "failed to clean up SQL Server temp backup file (non-fatal)",
 					slog.String("serverId", server.ID),
 					slog.Int("exitCode", exitCode),
@@ -199,7 +195,7 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 	// attempted (see the deferred cleanup above), whether this step, the
 	// stream, or the upload succeeds or fails.
 	if plan.PreCmd != "" {
-		stdout, stderr, exitCode, runErr := sshClient.RunCommand(ctx, plan.PreCmd)
+		stdout, stderr, exitCode, runErr := runner.RunCommand(ctx, plan.PreCmd)
 		if runErr != nil || exitCode != 0 {
 			errMsg := backupcore.TruncateText(backupcore.RedactSecret(fmt.Sprintf("falha ao executar BACKUP DATABASE (exit code %d)", exitCode), dbPassword), backupcore.MaxStoredErrorLen)
 			combinedLog := backupcore.TruncateText(backupcore.RedactSecret(strings.TrimSpace("stdout: "+stdout+"\nstderr: "+stderr), dbPassword), backupcore.MaxStoredLogLen)
@@ -218,7 +214,7 @@ func (e *BackupExecutor) ExecuteBackup(ctx context.Context, backupRun *domain.Ba
 
 	// Start the dump stream
 	dumpStart := time.Now()
-	stdout, wait, err := sshClient.StreamCommand(ctx, plan.StreamCmd)
+	stdout, wait, err := runner.StreamCommand(ctx, plan.StreamCmd)
 	if err != nil {
 		errMsg := backupcore.TruncateText(backupcore.RedactSecret(fmt.Sprintf("falha ao iniciar o dump: %s", err.Error()), dbPassword), backupcore.MaxStoredErrorLen)
 		e.logger.ErrorContext(ctx, "failed to start dump stream",
@@ -357,4 +353,3 @@ func (e *BackupExecutor) sweepRetention(ctx context.Context, backend storage.Bac
 	}
 	return result, nil
 }
-
